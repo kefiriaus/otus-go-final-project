@@ -1,0 +1,151 @@
+syntax = "proto3";
+package stats.v1;
+option go_package = "github.com/OtusGolang/final_project/pkg/api/stats/v1;statsv1";
+import "google/protobuf/timestamp.proto";
+
+// Each subscription starts with an M-second warmup, then emits every N seconds.
+service StatsService {
+  rpc Subscribe(SubscribeRequest) returns (stream Snapshot);
+}
+message SubscribeRequest {
+  // N: explicit integer seconds, 1..3600. Zero is invalid, not a default.
+  uint32 interval_seconds = 1;
+  // M: explicit integer seconds, 1..server maximum (default 3600). N > M is allowed.
+  uint32 window_seconds = 2;
+}
+enum CollectionState {
+  COLLECTION_STATE_UNSPECIFIED = 0;
+  COLLECTION_STATE_OK = 1;
+  COLLECTION_STATE_DISABLED = 2;
+  COLLECTION_STATE_UNAVAILABLE = 3;
+  COLLECTION_STATE_PARTIAL = 4;
+}
+// OK/PARTIAL require data presence; DISABLED/UNAVAILABLE require absent data.
+// UNSPECIFIED is not success. These invariants are enforced by the producer.
+message CollectionStatus {
+  CollectionState state = 1;
+  string detail = 2;
+  // Fraction of the window covered by usable measurements, in [0,1].
+  double coverage_ratio = 3;
+  // Absent if no sample exists. Connections describe this instant, not an average.
+  google.protobuf.Timestamp last_sample_at = 4;
+}
+// All sections refer to the UTC half-open window [window_start, window_end).
+message Snapshot {
+  google.protobuf.Timestamp window_start = 1;
+  google.protobuf.Timestamp window_end = 2;
+  google.protobuf.Timestamp generated_at = 3;
+  LoadAverageSection load_average = 4;
+  CpuSection cpu = 5;
+  DiskIoSection disk_io = 6;
+  FilesystemsSection filesystems = 7;
+  TrafficSection traffic = 8;
+  ConnectionsSection connections = 9;
+}
+message LoadAverageSection {
+  CollectionStatus status = 1;
+  LoadAverage data = 2;
+}
+// Time-weighted means of system 1/5/15 minute load indicators over M seconds.
+// Values are not normalized by CPU count.
+message LoadAverage {
+  double load1 = 1;
+  double load5 = 2;
+  double load15 = 3;
+}
+message CpuSection {
+  CollectionStatus status = 1;
+  CpuUsage data = 2;
+}
+// Percentages in [0,100], computed from counter deltas; guest is not counted twice.
+// User includes nice; system includes irq/softirq; idle excludes iowait.
+message CpuUsage {
+  double user_percent = 1;
+  double system_percent = 2;
+  double idle_percent = 3;
+  double iowait_percent = 4;
+  double steal_percent = 5;
+}
+message DiskIoSection {
+  CollectionStatus status = 1;
+  DiskIoData data = 2;
+}
+message DiskIoData { repeated DiskIo devices = 1; }
+// Whole-device completed read+write operations/s and KiB/s (1024 bytes).
+message DiskIo {
+  string device = 1;
+  double transfers_per_second = 2;
+  double kibibytes_per_second = 3;
+}
+message FilesystemsSection {
+  CollectionStatus status = 1;
+  FilesystemsData data = 2;
+}
+message FilesystemsData { repeated FilesystemUsage filesystems = 1; }
+// Time-weighted means; percentages use total capacity, not unprivileged availability.
+// Unknown inode values or percentages with zero capacity are absent.
+message FilesystemUsage {
+  string mount_point = 1;
+  string device = 2;
+  string filesystem_type = 3;
+  double used_mebibytes = 4;
+  optional double used_percent = 5;
+  optional double used_inodes = 6;
+  optional double used_inodes_percent = 7;
+}
+message TrafficSection {
+  CollectionStatus status = 1;
+  TrafficData data = 2;
+}
+// Protocols sorted by descending percent; directed flows by descending bytes/s.
+// Protocol ties use number; flow ties use source IP/port, destination IP/port, protocol.
+// Top-K defaults to 20; truncating output alone is not PARTIAL.
+message TrafficData {
+  repeated ProtocolTraffic protocols = 1;
+  repeated FlowTraffic flows = 2;
+}
+// IP bytes include the IP header; percent is relative to all observed IP bytes.
+// Protocol numbers are open-ended: TCP=6, UDP=17, ICMP=1, ICMPv6=58.
+message ProtocolTraffic {
+  uint32 protocol_number = 1;
+  uint64 bytes = 2;
+  double percent = 3;
+}
+// IPv4/IPv6 address without brackets or port. Port absence differs from port zero.
+message Endpoint {
+  string ip = 1;
+  // Present only for protocols with ports; range 0..65535.
+  optional uint32 port = 2;
+}
+// Directed traffic; bytes_per_second is bytes, not bits, over the usable window.
+message FlowTraffic {
+  Endpoint source = 1;
+  Endpoint destination = 2;
+  uint32 protocol_number = 3;
+  double bytes_per_second = 4;
+}
+message ConnectionsSection {
+  CollectionStatus status = 1;
+  ConnectionsData data = 2;
+}
+// Latest observed state, not a window average. UDP sockets are locally bound sockets.
+message ConnectionsData {
+  repeated ListeningSocket listening_sockets = 1;
+  repeated TcpStateCount tcp_states = 2;
+}
+message ListeningSocket {
+  Endpoint local = 1;
+  uint32 protocol_number = 2;
+  // Empty if ownership cannot be determined; multiple owners are possible.
+  repeated ProcessOwner owners = 3;
+}
+message ProcessOwner {
+  optional string command = 1;
+  optional uint32 pid = 2;
+  optional string user = 3;
+}
+// Canonical state names (e.g. ESTABLISHED, SYN_RECV, FIN_WAIT1); unknown names survive.
+message TcpStateCount {
+  string state = 1;
+  uint64 count = 2;
+}
