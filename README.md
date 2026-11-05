@@ -44,3 +44,7 @@
 Авторы ТЗ:
 - [Дмитрий Смаль](https://github.com/mialinx)
 - [Антон Телышев](https://github.com/Antonboom)
+
+### Реализация системного мониторинга
+
+[Структура проекта и команды проверки](./docs/system-stats-daemon.md).
