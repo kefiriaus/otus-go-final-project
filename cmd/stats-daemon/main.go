@@ -1,11 +1,7 @@
 package main
 
-import (
-	"fmt"
-	"os"
-)
+import "os"
 
 func main() {
-	fmt.Fprintln(os.Stderr, "stats-daemon: scaffold only; server is not implemented")
-	os.Exit(1)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
