@@ -153,3 +153,32 @@ hot reload, переменные окружения и автоматическ�
 Metric-specific formulas, CPU category percentages, capture accounting, timers,
 subscriptions, and application wiring remain later tasks. The daemon and client
 retain their existing scaffold behavior.
+
+## Linux load average
+
+`collector.NewLoadAverageSource()` reads `/proc/loadavg` directly on Linux.
+It requires mounted procfs and read access to that file, with no external
+utilities or additional privileges. The source and its constructor are available
+only on Linux; the domain type, parser, and aggregation code are portable.
+
+The first three fields are the system's 1/5/15-minute load indicators. They are
+not divided by CPU count or restricted to CPU percentages. File reads retain at
+most 4097 bytes and reject input exceeding 4096 bytes. Missing files, read/close
+errors, malformed values, nonfinite or negative numbers, and cancellation return
+errors rather than successful zero measurements.
+
+`metrics.LoadAverage` is independent of transport types. `aggregate.MeanLoadAverage`
+computes each indicator's time-weighted mean using the same intervals and the
+existing `WeightedMean` reducer. All three indicators share coverage, partial
+status, and last-sample time. Valid zeros remain present measurements. A failed
+attempt interrupts `GaugeSeries` continuity; a subsequent success restores it.
+
+Collection checks cancellation before opening and after reading. A synchronous
+procfs read cannot be forcibly interrupted; no background goroutine is abandoned
+to simulate cancellation. `RunPeriodic` also checks its measurement deadline.
+
+Fixture tests cover parsing, failures, recovery, and independent window reads.
+`TestLoadAverageRealLinux` checks the actual kernel source without assuming fixed
+load values; it skips only when the procfs load-average file is absent.
+Application startup, configuration switches, server delivery, and client output
+are not wired yet. Both binaries retain their existing scaffold behavior.
