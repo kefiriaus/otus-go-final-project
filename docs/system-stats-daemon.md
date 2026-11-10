@@ -1,0 +1,155 @@
+# System stats daemon
+
+Финальный проект OTUS: сбор системной статистики и передача клиентам по gRPC.
+
+Определён Protobuf-контракт, добавлены загрузка конфигурации и CLI демона.
+После успешной проверки конфигурации демон пока завершается с сообщением
+об отсутствии реализации сервера и кодом 1. Клиент остаётся каркасом.
+
+## Структура
+
+- `cmd/stats-daemon` — точка входа демона.
+- `cmd/stats-client` — точка входа клиента.
+- `internal/collector` — получение исходных измерений.
+- `internal/aggregate` — история в памяти и расчёты за окно.
+- `internal/config` — загрузка и проверка конфигурации.
+- `internal/transport/grpc` — потоковая передача статистики.
+
+## Проверка
+
+Используется Go 1.27.3 (актуальный стабильный релиз на 2026-11-05).
+Из корня репозитория:
+
+```sh
+go list ./...
+go build ./...
+go vet ./...
+go test ./...
+```
+
+Контрактные тесты проверяют сериализацию, сохранение отсутствующих значений
+и измеренных нулей. Реализация gRPC-сервера появится в следующих задачах.
+Основная платформа — Linux; поддержка заполненности файловых систем
+на macOS запланирована отдельно.
+
+Сторонние библиотеки допускаются только для gRPC/Protobuf и их транзитивных
+зависимостей. Сбор и агрегация используют стандартную библиотеку Go.
+
+## API
+
+[Protobuf-контракт, семантика полей и генерация](../api/stats/v1/README.md).
+Исходник: `api/stats/v1/stats.proto`, Go-пакет: `pkg/api/stats/v1`.
+
+## Конфигурация демона
+
+Из корня репозитория:
+
+```sh
+go run ./cmd/stats-daemon -h
+go run ./cmd/stats-daemon -port 50051 -config configs/stats-daemon.json
+```
+
+`-port` задаёт целый порт 1..65535, по умолчанию 50051. `-config` — путь
+к JSON, относительно текущего рабочего каталога. Без флага файл не читается,
+используются defaults. Явный пустой путь — ошибка. Повторный CLI-флаг
+заменяет предыдущее значение. Позиционные аргументы не принимаются.
+
+[Полный пример](../configs/stats-daemon.json) включает все шесть подсистем.
+Частичная конфигурация для отключения CPU:
+
+```json
+{"subsystems":{"cpu":false},"max_window_seconds":60}
+```
+
+Все подсистемы по умолчанию включены: `load_average`, `cpu`, `disk_io`,
+`filesystems`, `traffic`, `connections`. Каждая отключается независимо;
+выключить все допустимо. Пропущенные поля сохраняют defaults, `{}` допустим.
+`max_window_seconds` — целое 1..3600, по умолчанию 3600: предел клиентского M
+и будущего хранения истории. Порт в JSON не задаётся.
+
+Неизвестные поля, неверные типы, null вместо объекта/значений, пустой файл,
+несколько JSON-документов и завершающий мусор отклоняются. Повторный ключ
+заменяется последним значением (правило encoding/json). Ошибка файла
+не подменяется defaults. Изменения применяются после перезапуска;
+hot reload, переменные окружения и автоматический поиск файла не поддерживаются.
+
+Коды завершения бинарника:
+
+- 0 — `-h`/`-help`, справка в stdout, файл не читается;
+- 2 — ошибка CLI/конфигурации, диагностика в stderr;
+- 1 — валидная конфигурация, но сервер пока не реализован (scaffold в stderr).
+
+`go run` дополнительно печатает `exit status 1`/`exit status 2` и не сохраняет
+код ошибки запущенного бинарника. Для проверки кодов используйте собранный бинарник.
+Порт пока только проверяется; listener и запуск сборщиков появятся в следующих задачах.
+Переключатели ещё не управляют реальными сборщиками.
+
+## Механизм сбора
+
+`internal/collector` содержит независимый от Protobuf механизм сбора:
+
+- `RunPeriodic[T]` получает типизированный `Source[T]`, выполняет первый замер
+  сразу и следующие по фиксированной сетке. Defaults: период 1 секунда,
+  таймаут замера 900 мс. Занятые такты пропускаются, вызовы не перекрываются.
+- `Sample[T]` содержит UTC-время начала/окончания, значение и ошибку.
+  При ошибке значение обнуляется; следующий замер продолжает работу.
+- Вызывающий код владеет каналом результатов и закрывает его после остановки
+  отправителей. Медленное чтение задерживает только соответствующий runner;
+  отмена context прерывает ожидание отправки. Источник не изменяет возвращённые
+  данные и обязан соблюдать context: произвольный Go-вызов принудительно
+  остановить нельзя.
+- `RunGroup` конкурентно запускает рабочие функции, при отмене ждёт их cleanup.
+  Ошибки измерений передаются в Sample. Терминальный выход рабочей функции
+  отменяет группу; неожиданный успешный выход тоже считается ошибкой.
+  Пустая группа ждёт отмены. Непрерывный захват пакетов сможет использовать
+  этот lifecycle отдельно от периодического сбора.
+- `CommandRunner` запускает короткие команды напрямую без shell. Defaults:
+  900 мс и по 1 MiB для stdout/stderr. При переполнении вывод обрезается,
+  возвращается `ErrOutputLimit`; причина ошибки процесса сохраняется.
+  Отмена завершает непосредственный процесс, а не дерево потомков.
+  `WaitDelay` 100 мс ограничивает ожидание унаследованных потоков вывода.
+  Непрерывный tcpdump требует отдельного streaming-механизма.
+
+Реальные сборщики, история и подключение механизма к CLI ещё не реализованы;
+поведение бинарников остаётся описанным выше каркасом.
+
+## History and aggregation
+
+`internal/aggregate` provides reusable core algorithms without Protobuf or gRPC:
+
+- `Window` uses UTC half-open ranges `[start,end)`. `Schedule` anchors the first
+  response to request acceptance plus M seconds and later deadlines to N seconds.
+  `NextAfter` skips missed deadlines; it does not run timers or send responses.
+- Each `History[T]` uses a fixed-capacity ring, retaining intervals intersecting
+  a retention range ending at the latest accepted interval end and lasting
+  `maxWindowSeconds + 2` seconds.
+  The default series capacity is `maxWindowSeconds + 2`; dense input may evict
+  entries earlier. Reads do not consume history and are safe alongside writes.
+- `GaugeSeries[T]` holds one pending value and its bounded history. A value is
+  usable until the next attempt, for at most one second. An error ends it early.
+- `CounterSeries` holds one baseline and bounded rate history. Rates require
+  adjacent successful points with unchanged generation/vector length, increasing
+  counters, and at most 1.1 seconds between points. Errors or invalid continuity
+  break the interval; a successful point establishes a fresh baseline. Subtraction
+  precedes float conversion. Generation must identify resets that values alone
+  cannot reveal. A closing counter observation may be exactly at window end.
+- Adapters use measurement completion time (`collector.Sample.FinishedAt`) when
+  application wiring converts measurements to events. Aggregate does not import
+  collector. Event timestamps must increase strictly within each series.
+- `WeightedMean` and `MeanRates` weight values by usable intersection duration;
+  gaps are excluded from the denominator. Coverage divides usable duration by
+  total window duration. `Latest` returns the last eligible state observed before
+  window end, with coverage describing collection availability.
+- `Summary.Data == nil` represents unavailable data; measured zero has present
+  data. Partial inputs or incomplete time coverage produce `Partial=true`.
+  Future transport maps present results to OK/PARTIAL and empty results to
+  UNAVAILABLE; DISABLED comes from configuration outside these algorithms.
+- Callers must keep stored values and referenced slices/maps immutable, including
+  values returned by reads. History copies interval records, not arbitrary nested
+  storage. Counter baselines copy incoming counters, and rate reducers return a
+  fresh vector. Entry counts are bounded; collectors must also bound the size of
+  individual values and the number of device/flow series they create.
+
+Metric-specific formulas, CPU category percentages, capture accounting, timers,
+subscriptions, and application wiring remain later tasks. The daemon and client
+retain their existing scaffold behavior.
