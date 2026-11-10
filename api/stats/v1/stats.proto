@@ -1,6 +1,6 @@
 syntax = "proto3";
 package stats.v1;
-option go_package = "github.com/OtusGolang/final_project/pkg/api/stats/v1;statsv1";
+option go_package = "github.com/kefiriaus/otus-go-final-project/pkg/api/stats/v1;statsv1";
 import "google/protobuf/timestamp.proto";
 
 // Each subscription starts with an M-second warmup, then emits every N seconds.

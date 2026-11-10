@@ -5,9 +5,9 @@
 
 ## Проект и Git
 
-- Нужный репозиторий: `final_project`, origin `git@github.com:OtusGolang/final_project.git`.
+- Нужный репозиторий: `final_project`, origin `git@github.com:kefiriaus/otus-go-final-project.git`.
 - Ветка разработки: `05-system-stats-daemon`, создана от `master` (`f4c8468`).
-- Go-модуль находится в корне: `github.com/OtusGolang/final_project`.
+- Go-модуль находится в корне: `github.com/kefiriaus/otus-go-final-project`.
 - Это отдельный проект, не каталог внутри репозитория домашних заданий `otus-go-home-work`.
 - Ошибочная ветка в `otus-go-home-work` была удалена. Работать только в `final_project`.
 - Локальные коммиты:
@@ -141,7 +141,7 @@ git status --short --branch
 ### Задача 3: Protobuf API (завершена)
 
 - `api/stats/v1/stats.proto`, package `stats.v1`.
-- Go import `github.com/OtusGolang/final_project/pkg/api/stats/v1`, package `statsv1`.
+- Go import `github.com/kefiriaus/otus-go-final-project/pkg/api/stats/v1`, package `statsv1`.
 - RPC `StatsService.Subscribe(SubscribeRequest) returns (stream Snapshot)`.
 - Request: interval_seconds, window_seconds.
 - Snapshot: границы окна, generated_at и шесть секций: load_average/cpu/disk_io/filesystems/traffic/connections.

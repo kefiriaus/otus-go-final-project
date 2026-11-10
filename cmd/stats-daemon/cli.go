@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/OtusGolang/final_project/internal/config"
+	"github.com/kefiriaus/otus-go-final-project/internal/config"
 )
 
 func parseArgs(args []string, output io.Writer) (config.Config, error) {
