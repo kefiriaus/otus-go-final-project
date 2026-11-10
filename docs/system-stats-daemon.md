@@ -112,3 +112,44 @@ hot reload, переменные окружения и автоматическ�
 
 Реальные сборщики, история и подключение механизма к CLI ещё не реализованы;
 поведение бинарников остаётся описанным выше каркасом.
+
+## History and aggregation
+
+`internal/aggregate` provides reusable core algorithms without Protobuf or gRPC:
+
+- `Window` uses UTC half-open ranges `[start,end)`. `Schedule` anchors the first
+  response to request acceptance plus M seconds and later deadlines to N seconds.
+  `NextAfter` skips missed deadlines; it does not run timers or send responses.
+- Each `History[T]` uses a fixed-capacity ring, retaining intervals intersecting
+  a retention range ending at the latest accepted interval end and lasting
+  `maxWindowSeconds + 2` seconds.
+  The default series capacity is `maxWindowSeconds + 2`; dense input may evict
+  entries earlier. Reads do not consume history and are safe alongside writes.
+- `GaugeSeries[T]` holds one pending value and its bounded history. A value is
+  usable until the next attempt, for at most one second. An error ends it early.
+- `CounterSeries` holds one baseline and bounded rate history. Rates require
+  adjacent successful points with unchanged generation/vector length, increasing
+  counters, and at most 1.1 seconds between points. Errors or invalid continuity
+  break the interval; a successful point establishes a fresh baseline. Subtraction
+  precedes float conversion. Generation must identify resets that values alone
+  cannot reveal. A closing counter observation may be exactly at window end.
+- Adapters use measurement completion time (`collector.Sample.FinishedAt`) when
+  application wiring converts measurements to events. Aggregate does not import
+  collector. Event timestamps must increase strictly within each series.
+- `WeightedMean` and `MeanRates` weight values by usable intersection duration;
+  gaps are excluded from the denominator. Coverage divides usable duration by
+  total window duration. `Latest` returns the last eligible state observed before
+  window end, with coverage describing collection availability.
+- `Summary.Data == nil` represents unavailable data; measured zero has present
+  data. Partial inputs or incomplete time coverage produce `Partial=true`.
+  Future transport maps present results to OK/PARTIAL and empty results to
+  UNAVAILABLE; DISABLED comes from configuration outside these algorithms.
+- Callers must keep stored values and referenced slices/maps immutable, including
+  values returned by reads. History copies interval records, not arbitrary nested
+  storage. Counter baselines copy incoming counters, and rate reducers return a
+  fresh vector. Entry counts are bounded; collectors must also bound the size of
+  individual values and the number of device/flow series they create.
+
+Metric-specific formulas, CPU category percentages, capture accounting, timers,
+subscriptions, and application wiring remain later tasks. The daemon and client
+retain their existing scaffold behavior.

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	statsv1 "github.com/OtusGolang/final_project/pkg/api/stats/v1"
+	statsv1 "github.com/kefiriaus/otus-go-final-project/pkg/api/stats/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )

@@ -1,4 +1,4 @@
-module github.com/OtusGolang/final_project
+module github.com/kefiriaus/otus-go-final-project
 
 go 1.27.3
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/OtusGolang/final_project/internal/config"
+	"github.com/kefiriaus/otus-go-final-project/internal/config"
 )
 
 func configFile(t *testing.T, content string) string {

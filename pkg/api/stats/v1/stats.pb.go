@@ -1591,7 +1591,7 @@ const file_api_stats_v1_stats_proto_rawDesc = "" +
 	"\x1cCOLLECTION_STATE_UNAVAILABLE\x10\x03\x12\x1c\n" +
 	"\x18COLLECTION_STATE_PARTIAL\x10\x042M\n" +
 	"\fStatsService\x12=\n" +
-	"\tSubscribe\x12\x1a.stats.v1.SubscribeRequest\x1a\x12.stats.v1.Snapshot0\x01B>Z<github.com/OtusGolang/final_project/pkg/api/stats/v1;statsv1b\x06proto3"
+	"\tSubscribe\x12\x1a.stats.v1.SubscribeRequest\x1a\x12.stats.v1.Snapshot0\x01BEZCgithub.com/kefiriaus/otus-go-final-project/pkg/api/stats/v1;statsv1b\x06proto3"
 
 var (
 	file_api_stats_v1_stats_proto_rawDescOnce sync.Once

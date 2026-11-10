@@ -20,6 +20,6 @@ PATH="$tools_dir:$PATH"
 export PATH
 cd "$root"
 protoc -I . \
-  --go_out=. --go_opt=module=github.com/OtusGolang/final_project \
-  --go-grpc_out=. --go-grpc_opt=module=github.com/OtusGolang/final_project \
+  --go_out=. --go_opt=module=github.com/kefiriaus/otus-go-final-project \
+  --go-grpc_out=. --go-grpc_opt=module=github.com/kefiriaus/otus-go-final-project \
   api/stats/v1/stats.proto
