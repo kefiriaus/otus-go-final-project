@@ -221,3 +221,51 @@ Fixture tests cover unequal-total weighting, clipped windows, guest columns,
 resets, failures, recovery, and independent client reads. `TestCPURealLinux`
 verifies the actual `/proc/stat` source; it skips only for absent procfs.
 Application startup and CLI/gRPC delivery remain unwired.
+
+## Linux disk I/O
+
+`collector.NewDiskIOSource()` enumerates `/sys/block` and reads each whole device's
+`dev` and `stat` files. Sysfs must be mounted and readable; no external tool or
+additional privilege is required. Directory entries may be symlinks. Nested
+partitions are not enumerated, and naming heuristics are not used. Whole virtual
+devices such as loop, RAID, and device-mapper devices are included, with no
+automatic sum across devices or storage layers.
+
+Collection allows at most 128 devices, 4096 stat bytes, and 128 identity bytes.
+Directory enumeration and file reads are bounded, including one extra item/byte
+to detect overflow. Capacity or enumeration failures return an overall error and
+no observation. Successful enumeration can return an empty list. A failure for
+one device returns an explicit `DiskIOReading.Err` with zero counters while
+other devices continue. Consumers must inspect these errors even when Collect
+returns nil. Cancellation discards the observation; synchronous sysfs reads have
+the same cancellation limitations as the procfs sources.
+
+`DiskIOCounterPoint` preserves four raw components until after subtraction:
+completed reads, completed writes, sectors read, and sectors written. It uses
+canonical major:minor identity as the counter generation. Decreasing counters,
+identity changes, errors, and long gaps invalidate the affected interval.
+`MeanDiskIO` reports one device's time-weighted completed read+write operations/s
+and KiB/s. Kernel sector counters always use 512-byte units, regardless of hardware
+block size: one sector equals 0.5 KiB. Merges, discard/flush operations, timings,
+and in-flight counts are not included in the reported rates. Unchanged counters
+are valid zero activity with present data, unlike unavailable measurements.
+
+Application wiring must maintain separate bounded histories for devices. For a
+known device absent from a successful observation, send an error event to break
+its baseline; a per-reading failure interrupts only that device, and an overall
+collection failure interrupts all known devices. Future registry management must
+bound device count, retain removed-device history for relevant windows, and expire
+old entries. This task does not introduce that production registry or final section
+assembly. Future transport can distinguish a successful empty enumeration, partial
+usable device data, and all-device unavailability; one baseline alone has no rate.
+
+Identity is checked before and after the stat read; a changed identity rejects
+that device reading. Major:minor identity and observed disappearance detect many
+replacements, but a
+same-name/same-identity replacement with higher counters between samples cannot
+be reliably detected. Complete hotplug detection is not claimed.
+
+Fixtures cover partitions, virtual devices, per-device failures, disappearance,
+identity changes, resets, independent client windows, limits, and measured zero.
+`TestDiskIORealLinux` checks actual sysfs enumeration and reports device failures;
+it skips only when block enumeration is absent. CLI/gRPC wiring remains pending.
