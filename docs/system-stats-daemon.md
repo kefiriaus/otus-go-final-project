@@ -182,3 +182,42 @@ Fixture tests cover parsing, failures, recovery, and independent window reads.
 load values; it skips only when the procfs load-average file is absent.
 Application startup, configuration switches, server delivery, and client output
 are not wired yet. Both binaries retain their existing scaffold behavior.
+
+## Linux CPU usage
+
+`collector.NewCPUSource()` reads the first aggregate `cpu` line from `/proc/stat`.
+It does not sum per-CPU lines or require external tools or extra privileges.
+The source is Linux-only; the metric types, parser, and reducer are portable.
+It accepts up to 4096 bytes in the first line, including its newline, and bounds
+prefetch to 4097 bytes. Open/read/close failures, malformed counters, oversized
+lines, and cancellation return errors instead of successful zero counters.
+Synchronous procfs reads use the same cancellation limitations as load average.
+
+`metrics.CPUCounters` retains eight raw uint64 categories until after subtraction:
+user, nice, system, idle, iowait, irq, softirq, and steal. Missing trailing historical
+categories default to zero; supplied trailing guest/future fields must be numeric.
+Guest time is already included in user/nice and is not added a second time.
+`aggregate.CPUCounterPoint` feeds these categories to the bounded `CounterSeries`.
+Any raw decrease, including iowait decreasing, invalidates the interval. Errors
+and long gaps break continuity; later successful points establish a new baseline.
+Generation is process-local, and daemon restart starts a fresh baseline.
+
+`aggregate.MeanCPUUsage` computes percentages from time-weighted category rates,
+which is equivalent to the ratio of accumulated deltas over usable window
+intersections. It does not average interval percentages or divide by CPU count.
+A common scale keeps finite rate arithmetic bounded without changing the ratio.
+
+- User includes nice.
+- System includes irq and softirq.
+- Idle includes only idle; iowait and steal have separate percentages.
+- The denominator includes the eight categories exactly once. USER_HZ cancels.
+- All-zero-total intervals have no usable distribution and are excluded from
+  coverage. They do not become idle=100% or a present all-zero CPU distribution.
+  With no usable intervals, data and last-sample time are absent. A measured zero
+  user percentage with other active categories remains a valid value.
+
+All five percentages share coverage, partial status, and last-sample time.
+Fixture tests cover unequal-total weighting, clipped windows, guest columns,
+resets, failures, recovery, and independent client reads. `TestCPURealLinux`
+verifies the actual `/proc/stat` source; it skips only for absent procfs.
+Application startup and CLI/gRPC delivery remain unwired.
