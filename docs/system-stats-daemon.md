@@ -269,3 +269,57 @@ Fixtures cover partitions, virtual devices, per-device failures, disappearance,
 identity changes, resets, independent client windows, limits, and measured zero.
 `TestDiskIORealLinux` checks actual sysfs enumeration and reports device failures;
 it skips only when block enumeration is absent. CLI/gRPC wiring remains pending.
+
+## Linux filesystem usage
+
+`collector.NewFilesystemsSource()` reads this process's `/proc/self/mountinfo` and
+uses Linux `statfs` for each eligible visible mount. Mount points identify results;
+bind mounts at different paths remain separate. Mountinfo escapes are decoded,
+stacked mounts are resolved through parent relationships, and descendants hidden
+by an overmount are excluded before filesystem-type filtering. Namespace mount
+roots such as `net:[…]` are opaque metadata, not assumed to be absolute paths.
+
+Service and virtual filesystems are excluded: proc, sysfs, tmpfs, devtmpfs, devpts,
+cgroup/cgroup2, securityfs, pstore, debugfs, tracefs, configfs, fusectl, hugetlbfs,
+mqueue, binfmt_misc, rpc_pipefs, nsfs, autofs, bpf, selinuxfs, efivarfs, ramfs,
+rootfs, overlay, and aufs. Other types, including block-backed and network mounts,
+remain eligible. An overlay-only container may therefore have no eligible mounts.
+
+Mountinfo is limited to 1 MiB, individual lines to 64 KiB, records to 1024, and
+eligible mounts to 128. Malformed, ambiguous, cyclic, or oversized mount tables
+fail enumeration without partial results. Mount-specific statfs failures remain
+explicit reading errors while other readings survive. A successfully enumerated
+empty selection is a successful empty list. Procfs and statfs require read/access
+permissions but no external utilities or additional privileges.
+
+Used space is `(Blocks - Bfree) * accountingBlockSize`, with Frsize when positive
+and Bsize otherwise. Bavail is deliberately ignored: reserved blocks must not
+change the definition of used space. Used MiB divides bytes by 1024². Percentages
+use total capacity, and are absent when total capacity is zero. Inode usage uses
+`Files - Ffree`; zero or all-ones unavailable inode accounting produces absent
+inode fields. Inconsistent total/free counts and nonpositive accounting block
+sizes are errors; valid zero usage remains present data.
+
+`aggregate.MeanFilesystemUsage` independently time-weights used MiB, used inode
+counts, and each percentage. It does not calculate percentages from averaged
+capacities. Optional fields use intervals where they are available; incomplete
+optional coverage marks a result partial, while an unsupported field absent
+throughout remains absent. Inode means may be fractional. Per-mount base coverage
+and last-sample time follow the existing gauge rules.
+
+Mount ID, major:minor, and mount root form a best-effort identity. A window uses
+only its latest contributing identity, excluding previous backing mounts and
+reflecting that time loss in coverage. Metadata must be consistent within that
+identity. Mountinfo and statfs are not an atomic snapshot: remounts during a
+collection, including same-identity replacements, cannot be fully detected.
+
+Future application wiring must bound and expire per-mount histories, preserve
+removed-mount data for relevant windows, and send failed events for absent or
+failed mounts. Overall collection failure interrupts all mount series. This task
+adds no production registry, CLI/gRPC wiring, or schema/configuration changes.
+
+Cancellation is checked before enumeration, between mounts, and after statfs.
+A synchronous filesystem operation can block, particularly on remote filesystems;
+context cancellation cannot force it to return. No goroutines are abandoned to
+simulate a hard timeout. macOS implementation and real second-OS execution remain
+separate work; current source availability and real verification cover Linux.
