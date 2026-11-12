@@ -323,3 +323,90 @@ A synchronous filesystem operation can block, particularly on remote filesystems
 context cancellation cannot force it to return. No goroutines are abandoned to
 simulate a hard timeout. macOS implementation and real second-OS execution remain
 separate work; current source availability and real verification cover Linux.
+
+## Linux network top talkers
+
+`collector.NewTrafficCapture` creates a continuous worker using one tcpdump process
+per selected interface. It does not use the periodic source or short-command
+runner. Selection is fixed at construction: by default interfaces must be up and
+not loopback. Explicit loopback selection requires `IncludeLoopback=true`.
+At most eight interfaces are allowed; a larger default selection returns an
+error, so callers must choose a smaller explicit set. Interface options are
+currently programmatic; CLI/JSON and application wiring remain pending.
+
+Capture runs directly without a shell, in nonpromiscuous mode, with both directions,
+packet-buffered PCAP output and a 262144-byte snapshot limit. TCPdump must be installed
+and have the host's packet-capture permissions (typically CAP_NET_RAW on Linux;
+additional restrictions can depend on host policy). This code does not install
+packages, grant capabilities, or elevate privileges. It retains only IP metadata,
+not payloads or capture files. Multiple selected interfaces can observe the same
+packet across different network layers; observations are not deduplicated. Select
+an appropriate single interface when duplicate layer observations are unwanted.
+
+Classic PCAP 2.4 in either byte order and microsecond/nanosecond precision is
+supported. Ethernet/VLAN (up to four tags), raw IP, Linux cooked SLL/SLL2 and
+explicit IPv4/IPv6 link types are decoded. IP byte counts include the IP header
+and exclude link headers, VLAN tags, padding and declared FCS bytes. IPv6 extension
+traversal is bounded at 16 headers. Protocol numbers remain open-ended. TCP/UDP
+port 0 is present, while protocols without parsed ports use absent ports.
+
+No fragment reassembly is attempted. Identifiable protocol bytes from fragments
+are retained, with partial flow attribution when transport ports are unavailable.
+Malformed frames, unsupported jumbo encodings, unsupported capture link formats,
+and inconsistent lengths produce diagnostics/loss rather than invented values.
+A truncated packet with sufficient headers may still supply its declared IP
+length when consistent with the original wire length.
+
+`aggregate.TrafficHistory` stores a fixed-capacity packet metadata ring with exact
+capture timestamps and an explicit clock watermark. Defaults are 65536 packet
+records and 4096 distinct tracked flows. Hard limits are 1048576 records and 65536
+flows; retention is maximum M plus two seconds. Out-of-order timestamps are
+accepted within retention; packet timestamps more than five seconds beyond the
+watermark are rejected. Per-interface availability histories and coalesced loss
+ranges are also bounded. Sustained high packet rates can exhaust packet retention
+before M expires, making affected long-window results partial. Flow-cap rejection
+preserves protocol bytes when packet capacity permits. Top-K truncation alone does
+not mark data partial. Expired records release their flow references.
+
+Queries use exact half-open windows without prorating packet-byte buckets.
+Protocol totals and percentages use retained IP bytes. Flow rates divide retained
+bytes by usable capture duration, rather than the packet span or full unavailable
+window. Coverage is time with at least one selected interface active; missing
+selected interfaces still make results partial, even when coverage is 1. Quiet
+full capture yields present empty lists. No usable capture time yields absent data.
+Last-sample time is the latest usable capture/checkpoint boundary, not the latest
+packet. Sort order follows the API contract, including lexical canonical IP
+strings and absent ports preceding present ones. Queries return independent slices. Open availability is clipped to the explicit
+watermark; a query beyond the latest checkpoint is conservatively partial. Future
+application wiring must coordinate fresh checkpoints with capture before building
+snapshots, rather than racing independent decreasing Advance calls.
+
+Each interface retries failures after one second by default (configurable from one
+second through one minute). Failures remain internal to this worker so other metrics
+can continue. A valid global PCAP header establishes readiness. Availability closes
+at a detected failure/cancellation, before shutdown and pipe drain, and a late header
+cannot reactivate a stopped session. Normal SIGINT shutdown drains final buffered
+frames. After 500 ms the direct child is killed; forced shutdown or incomplete drains
+mark results incomplete. All owned processes, pipes, timers and goroutines are joined.
+
+SIGUSR1 requests kernel-drop statistics once per second. Increased drops use
+conservative request-time boundaries rather than stderr receipt time. Missing or
+malformed reports, rejected/delayed packets, decode errors, failed sessions, and
+retention losses mark affected windows partial. Loss ranges can coalesce across
+gaps and overstate incompleteness; they never promise full accounting after a
+recorded loss. Sampling, packet arrival and loss reports are asynchronous, so later
+reports may revise historical window completeness. No method can detect losses
+that the OS does not report. LastError retains a bounded diagnostic and underlying
+process errors. A broken sink is terminal; invalid/expired packet metadata is a
+recoverable loss, distinguished by `metrics.ErrTrafficPacketRejected`.
+
+Verification uses synthetic PCAP, helper processes, quiet capture, errors/retries,
+stderr floods, clock boundaries, bounded churn and cancellation fixtures. Installed
+tools here are tcpdump 4.99.6/libpcap 1.10.6; interface enumeration succeeded outside
+the sandbox. The opt-in loopback test (`OTUS_TRAFFIC_SMOKE=1`) was attempted and
+skipped because the current user lacks packet-capture permission. Actual live
+capture is therefore not verified here. The selected flags and SIGUSR1 behavior
+were checked against the upstream [tcpdump 4.9.2 manual](https://raw.githubusercontent.com/the-tcpdump-group/tcpdump/tcpdump-4.9.2/tcpdump.1.in)
+and [source](https://raw.githubusercontent.com/the-tcpdump-group/tcpdump/tcpdump-4.9.2/tcpdump.c),
+including initial header flushing with `-U`; this is not a real Ubuntu 18.04
+execution result.
