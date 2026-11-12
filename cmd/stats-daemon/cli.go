@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -60,8 +61,8 @@ func parseArgs(args []string, output io.Writer) (config.Config, error) {
 	return cfg, nil
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
-	_, err := parseArgs(args, stdout)
+func runContext(ctx context.Context, args []string, stdout, stderr io.Writer, serveFn func(context.Context, config.Config) error) int {
+	cfg, err := parseArgs(args, stdout)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
@@ -69,6 +70,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "stats-daemon: %v\n", err)
 		return 2
 	}
-	fmt.Fprintln(stderr, "stats-daemon: scaffold only; server is not implemented")
-	return 1
+	if err := serveFn(ctx, cfg); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintf(stderr, "stats-daemon: %v\n", err)
+		return 1
+	}
+	return 0
 }

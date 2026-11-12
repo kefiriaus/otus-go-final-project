@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -29,7 +30,7 @@ func TestRun(t *testing.T) {
 		code     int
 		out, err string
 	}{
-		{"defaults", nil, 1, "", "scaffold only"},
+		{"defaults", nil, 0, "", ""},
 		{"short help", []string{"-h"}, 0, "-port", ""},
 		{"long help", []string{"-help"}, 0, "-config", ""},
 		{"help skips file", []string{"-config", missing, "-h"}, 0, "Usage", ""},
@@ -41,11 +42,11 @@ func TestRun(t *testing.T) {
 		{"empty config", []string{"-config="}, 2, "", "config path"},
 		{"invalid file", []string{"-config", invalid}, 2, "", invalid},
 		{"missing file", []string{"-config", missing}, 2, "", missing},
-		{"valid file", []string{"-port", "12345", "-config", valid}, 1, "", "scaffold only"},
+		{"valid file", []string{"-port", "12345", "-config", valid}, 0, "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := run(tt.args, &stdout, &stderr)
+			code := runContext(context.Background(), tt.args, &stdout, &stderr, func(context.Context, config.Config) error { return nil })
 			if code != tt.code {
 				t.Fatalf("exit=%d want=%d stderr=%q", code, tt.code, stderr.String())
 			}

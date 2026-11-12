@@ -95,3 +95,19 @@ func (h *History[T]) Read(window Window) ([]Interval[T], error) {
 	}
 	return result, nil
 }
+
+// PruneBefore releases entries outside the retained range and clips its boundary.
+func (h *History[T]) PruneBefore(cutoff time.Time) error {
+	if cutoff.IsZero() {
+		return fmt.Errorf("pruning requires a nonzero cutoff")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for h.size > 0 && !h.entries[h.head].End.After(cutoff) {
+		h.drop()
+	}
+	if h.size > 0 && h.entries[h.head].Start.Before(cutoff) {
+		h.entries[h.head].Start = cutoff.UTC()
+	}
+	return nil
+}

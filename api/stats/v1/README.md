@@ -2,7 +2,7 @@
 
 `stats.v1.StatsService.Subscribe` принимает `SubscribeRequest` и возвращает
 server-side stream составных `Snapshot`. Схема — [stats.proto](stats.proto).
-Сервер пока не реализован; этот этап определяет транспортный контракт.
+The daemon implements this service; see [runtime behavior](../../../docs/system-stats-daemon.md#running-the-grpc-daemon).
 
 ## Семантика
 

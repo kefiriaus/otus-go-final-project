@@ -2,9 +2,8 @@
 
 Финальный проект OTUS: сбор системной статистики и передача клиентам по gRPC.
 
-Определён Protobuf-контракт, добавлены загрузка конфигурации и CLI демона.
-После успешной проверки конфигурации демон пока завершается с сообщением
-об отсутствии реализации сервера и кодом 1. Клиент остаётся каркасом.
+The daemon runs the Linux collectors and serves the Stats API over gRPC.
+The CLI client remains a scaffold until task 14.
 
 ## Структура
 
@@ -28,7 +27,7 @@ go test ./...
 ```
 
 Контрактные тесты проверяют сериализацию, сохранение отсутствующих значений
-и измеренных нулей. Реализация gRPC-сервера появится в следующих задачах.
+и измеренных нулей. Streaming behavior is covered by transport tests.
 Основная платформа — Linux; поддержка заполненности файловых систем
 на macOS запланирована отдельно.
 
@@ -73,16 +72,14 @@ go run ./cmd/stats-daemon -port 50051 -config configs/stats-daemon.json
 не подменяется defaults. Изменения применяются после перезапуска;
 hot reload, переменные окружения и автоматический поиск файла не поддерживаются.
 
-Коды завершения бинарника:
+Exit codes:
 
-- 0 — `-h`/`-help`, справка в stdout, файл не читается;
-- 2 — ошибка CLI/конфигурации, диагностика в stderr;
-- 1 — валидная конфигурация, но сервер пока не реализован (scaffold в stderr).
+- 0: help or normal SIGINT/SIGTERM cancellation.
+- 2: CLI/configuration errors, reported on stderr.
+- 1: listener, server, or terminal runtime failure, reported on stderr.
 
-`go run` дополнительно печатает `exit status 1`/`exit status 2` и не сохраняет
-код ошибки запущенного бинарника. Для проверки кодов используйте собранный бинарник.
-Порт пока только проверяется; listener и запуск сборщиков появятся в следующих задачах.
-Переключатели ещё не управляют реальными сборщиками.
+The configured port is bound on all available TCP interfaces. Subsystem switches
+control which sources are constructed and started. Configuration applies at startup.
 
 ## Механизм сбора
 
@@ -110,8 +107,7 @@ hot reload, переменные окружения и автоматическ�
   `WaitDelay` 100 мс ограничивает ожидание унаследованных потоков вывода.
   Непрерывный tcpdump требует отдельного streaming-механизма.
 
-Реальные сборщики, история и подключение механизма к CLI ещё не реализованы;
-поведение бинарников остаётся описанным выше каркасом.
+The daemon runtime connects these workers to bounded histories and the gRPC service.
 
 ## History and aggregation
 
@@ -142,7 +138,7 @@ hot reload, переменные окружения и автоматическ�
   window end, with coverage describing collection availability.
 - `Summary.Data == nil` represents unavailable data; measured zero has present
   data. Partial inputs or incomplete time coverage produce `Partial=true`.
-  Future transport maps present results to OK/PARTIAL and empty results to
+  The transport maps present results to OK/PARTIAL and empty results to
   UNAVAILABLE; DISABLED comes from configuration outside these algorithms.
 - Callers must keep stored values and referenced slices/maps immutable, including
   values returned by reads. History copies interval records, not arbitrary nested
@@ -150,9 +146,7 @@ hot reload, переменные окружения и автоматическ�
   fresh vector. Entry counts are bounded; collectors must also bound the size of
   individual values and the number of device/flow series they create.
 
-Metric-specific formulas, CPU category percentages, capture accounting, timers,
-subscriptions, and application wiring remain later tasks. The daemon and client
-retain their existing scaffold behavior.
+Metric-specific aggregation and daemon wiring are implemented below. Client output remains task 14.
 
 ## Linux load average
 
@@ -181,7 +175,7 @@ Fixture tests cover parsing, failures, recovery, and independent window reads.
 `TestLoadAverageRealLinux` checks the actual kernel source without assuming fixed
 load values; it skips only when the procfs load-average file is absent.
 Application startup, configuration switches, server delivery, and client output
-are not wired yet. Both binaries retain their existing scaffold behavior.
+are wired through the daemon runtime; the client remains task 14.
 
 ## Linux CPU usage
 
@@ -220,7 +214,7 @@ All five percentages share coverage, partial status, and last-sample time.
 Fixture tests cover unequal-total weighting, clipped windows, guest columns,
 resets, failures, recovery, and independent client reads. `TestCPURealLinux`
 verifies the actual `/proc/stat` source; it skips only for absent procfs.
-Application startup and CLI/gRPC delivery remain unwired.
+Application startup and gRPC delivery are provided by the daemon runtime.
 
 ## Linux disk I/O
 
@@ -250,14 +244,10 @@ block size: one sector equals 0.5 KiB. Merges, discard/flush operations, timings
 and in-flight counts are not included in the reported rates. Unchanged counters
 are valid zero activity with present data, unlike unavailable measurements.
 
-Application wiring must maintain separate bounded histories for devices. For a
-known device absent from a successful observation, send an error event to break
-its baseline; a per-reading failure interrupts only that device, and an overall
-collection failure interrupts all known devices. Future registry management must
-bound device count, retain removed-device history for relevant windows, and expire
-old entries. This task does not introduce that production registry or final section
-assembly. Future transport can distinguish a successful empty enumeration, partial
-usable device data, and all-device unavailability; one baseline alone has no rate.
+The daemon maintains separate bounded device histories. Missing devices and
+per-reading errors break only the affected baseline; global errors break all
+baselines. The registry retains removed devices for relevant windows and expires
+old entries. Empty enumeration, partial data, and unavailable rates remain distinct.
 
 Identity is checked before and after the stat read; a changed identity rejects
 that device reading. Major:minor identity and observed disappearance detect many
@@ -268,7 +258,7 @@ be reliably detected. Complete hotplug detection is not claimed.
 Fixtures cover partitions, virtual devices, per-device failures, disappearance,
 identity changes, resets, independent client windows, limits, and measured zero.
 `TestDiskIORealLinux` checks actual sysfs enumeration and reports device failures;
-it skips only when block enumeration is absent. CLI/gRPC wiring remains pending.
+it skips only when block enumeration is absent. Daemon and gRPC wiring are implemented in task 13.
 
 ## Linux filesystem usage
 
@@ -313,10 +303,9 @@ reflecting that time loss in coverage. Metadata must be consistent within that
 identity. Mountinfo and statfs are not an atomic snapshot: remounts during a
 collection, including same-identity replacements, cannot be fully detected.
 
-Future application wiring must bound and expire per-mount histories, preserve
-removed-mount data for relevant windows, and send failed events for absent or
-failed mounts. Overall collection failure interrupts all mount series. This task
-adds no production registry, CLI/gRPC wiring, or schema/configuration changes.
+The daemon bounds and expires mount histories and interrupts missing/failed mounts.
+Overall collection failure interrupts every mount series. Schema and configuration
+remain unchanged.
 
 Cancellation is checked before enumeration, between mounts, and after statfs.
 A synchronous filesystem operation can block, particularly on remote filesystems;
@@ -377,9 +366,8 @@ full capture yields present empty lists. No usable capture time yields absent da
 Last-sample time is the latest usable capture/checkpoint boundary, not the latest
 packet. Sort order follows the API contract, including lexical canonical IP
 strings and absent ports preceding present ones. Queries return independent slices. Open availability is clipped to the explicit
-watermark; a query beyond the latest checkpoint is conservatively partial. Future
-application wiring must coordinate fresh checkpoints with capture before building
-snapshots, rather than racing independent decreasing Advance calls.
+watermark; a query beyond the latest checkpoint is conservatively partial. The daemon serializes capture callbacks and fresh snapshot checkpoints, coalescing
+stale heartbeat timestamps before calling the strict history API.
 
 Each interface retries failures after one second by default (configurable from one
 second through one minute). Failures remain internal to this worker so other metrics
@@ -466,9 +454,8 @@ observation.Data/Partial and collection errors into the corresponding gauge even
 Proc tables, FD links and process metadata are not an atomic snapshot. hidepid and
 ptrace restrictions, short-lived sockets/processes, and PID/inode reuse limit
 certainty; even one matched owner does not prove that no hidden owner exists.
-Future application wiring must also bound history by memory as well as sample
-count: maximum-size connection snapshots retained for a full hour can be expensive.
-Application, CLI/JSON, gRPC and client output remain unwired.
+The daemon enforces the connection history payload budget described below.
+Collection and gRPC are wired; client output remains task 14.
 
 Fixtures cover all table families, shared owners, duplicate endpoints, partial
 metadata, budgets, cancellation, recovery and independent windows. The real Linux
@@ -478,3 +465,57 @@ local binds were denied inside it: four IPv4/IPv6 TCP/UDP sockets were verified 
 all four matched this process's PID. Ownership remained partial because other
 processes' FD directories were denied. This is not a claim of complete host-wide
 ownership visibility or Ubuntu 18.04 runtime verification.
+
+
+## Running the gRPC daemon
+
+```sh
+go build -o /tmp/stats-daemon ./cmd/stats-daemon
+/tmp/stats-daemon -port 50051 -config configs/stats-daemon.json
+```
+
+Use an existing configuration file path, or omit `-config` for defaults. The daemon
+binds `:PORT` without TLS or authentication; choose its network placement accordingly.
+`stats.v1.StatsService.Subscribe` uses explicit `interval_seconds` (N) and
+`window_seconds` (M). N is 1..3600; M is 1..`max_window_seconds`. Invalid requests
+return InvalidArgument. N may exceed M. Every subscription waits its own M seconds
+before the first response, regardless of existing history, then emits on an
+acceptance-relative N-second schedule. Missed deadlines are skipped without bursts.
+All six sections share the same UTC half-open window. Collection failures remain
+section statuses, while invalid internal snapshots return Internal.
+
+Collectors start immediately and run without clients. Ordinary sources sample
+once per second with a 900 ms timeout; tcpdump capture runs continuously. Histories
+are shared, and reading a snapshot never consumes another client's data. The store
+serializes ingestion and snapshot construction; protobuf mapping and sending occur
+outside its gate. Disabled sources are never constructed. Unsupported platform
+sources are reported unavailable; real macOS filesystem support remains task 18.
+
+Resource defaults are programmatic policies, not additional JSON keys:
+
+- At most 32 active subscriptions across all connections; excess requests return
+  ResourceExhausted. Each has one in-flight response and one replaceable pending
+  response. A blocked Send times out after five seconds with DeadlineExceeded.
+- Device and mount registries each retain at most 128 keys, including removed keys.
+  Inactive keys expire after the configured maximum window plus two seconds.
+  New keys at capacity are omitted with partial/unavailable reporting, not silently
+  substituted for retained histories. Per-entity histories hold at most maximum
+  window plus two entries; missing/error events break continuity.
+- Connections retain at most 32 MiB of accounted payload and maximum window plus
+  two observations. Accounting includes exact-length nested copies, fixed records,
+  optional values, and strings, including the pending measurement. Allocator overhead,
+  temporary snapshots, transport buffers, and other histories are separate: this is
+  not an RSS limit. Oldest values are pruned on pressure, so long windows may have
+  incomplete coverage. A single oversized observation is unavailable with a diagnostic.
+- Traffic retains the existing 65536 packet records, 4096 flow keys, and at most
+  eight interfaces; top-20 output truncation alone does not make data partial.
+- Section diagnostics are limited to 512 bytes. Successful empty enumerations remain
+  present data. Coverage excludes gaps and missing expected entities, and optional
+  fields remain absent when unsupported.
+
+SIGINT/SIGTERM cancels subscriptions and collectors. gRPC gets five seconds for
+shutdown before forced Stop. Existing synchronous procfs/statfs calls still depend
+on the operating system returning; context cancellation cannot interrupt a blocked
+kernel syscall. Capture prerequisites and permission limitations remain as described
+in the traffic section. No automatic privilege changes are made. The CLI client and
+broader load/deployment work remain subsequent tasks.

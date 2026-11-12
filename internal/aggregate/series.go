@@ -163,3 +163,23 @@ func (s *CounterSeries) Read(window Window) ([]Interval[[]float64], error) {
 	defer s.mu.Unlock()
 	return s.history.Read(window)
 }
+
+// PruneBefore releases old gauge values, including an old pending value.
+func (s *GaugeSeries[T]) PruneBefore(cutoff time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.history.PruneBefore(cutoff); err != nil {
+		return err
+	}
+	if s.pending != nil && s.pending.At.Before(cutoff) {
+		s.pending = nil
+	}
+	return nil
+}
+
+// PruneBefore releases rate history without discarding the current baseline.
+func (s *CounterSeries) PruneBefore(cutoff time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.history.PruneBefore(cutoff)
+}
