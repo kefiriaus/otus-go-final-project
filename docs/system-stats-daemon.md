@@ -410,3 +410,71 @@ were checked against the upstream [tcpdump 4.9.2 manual](https://raw.githubuserc
 and [source](https://raw.githubusercontent.com/the-tcpdump-group/tcpdump/tcpdump-4.9.2/tcpdump.c),
 including initial header flushing with `-U`; this is not a real Ubuntu 18.04
 execution result.
+
+## Linux listening sockets and TCP states
+
+`collector.NewConnectionsSource` reads the four `/proc/self/net/tcp`, `tcp6`, `udp`,
+and `udp6` tables concurrently. Scope is the collector process's network namespace.
+Procfs is used directly, without parsing ss/netstat output or requiring those tools.
+IPv4 and IPv6 addresses use native byte order within 32-bit words; ports retain
+their numeric values. TCP states are canonical strings, including LISTEN, and
+unknown codes remain `UNKNOWN_XX`. Counts include every usable TCP row; UDP never
+contributes TCP-state counts.
+
+Output contains TCP LISTEN sockets and every UDP socket with a bound nonzero local
+port, including connected UDP. Distinct socket inodes remain separate even when
+they share an endpoint. Socket inode links under `/proc/<pid>/fd` identify owners;
+repeated FDs from one PID are deduplicated, while shared sockets can have multiple
+owners. FD directories stay open until their links are inspected, avoiding a
+self-induced disappearance when scanning the collector's own directory FD.
+
+Owner fields are optional. Command comes from comm (normally kernel-truncated to
+15 bytes), with only its final newline removed. Invalid UTF-8 or unavailable
+command/status files leave the corresponding field absent. User is the decimal
+effective UID from the process's status, not the socket creator UID or a username.
+No NSS/account-service lookup or privilege elevation occurs. Empty owner lists and
+missing fields remain distinguishable from fabricated PID 0 or user 0 values.
+
+Tables are limited to 4 MiB each and 4096-byte lines. Defaults bound 65536 combined
+rows and 1024 output sockets; hard limits are 262144 and 4096. Listener output
+truncation is partial but does not truncate TCP-state counts. A table read/parse
+failure preserves usable sibling tables as partial data; all four unavailable is
+an overall collection error. Valid empty tables are successful empty measurements.
+Missing IPv6 files are diagnosed as unavailable, not assumed to mean zero sockets.
+
+Owner lookup defaults: 4096 processes, 65536 total FD entries, 4096 FD entries per
+process, 8 owners per socket, and 300 ms. Hard ceilings are 8192/131072/8192/32;
+lookup time must be positive and at most one second. The process root also has a
+non-PID entry budget, and all directory reads use bounded batches plus an overflow
+detection entry. Comm/status/link limits are 256 bytes/64 KiB/4096 bytes. Diagnostic
+text is bounded to 4096 bytes. No process cache or growing registry survives Collect.
+
+Enrichment uses a separate deadline, reserving 50 ms before a parent deadline when
+possible. Count/time limits, permissions, process/FD disappearance, malformed links
+and unmatched listener inodes mark ownership partial while retaining known PIDs
+and accessible fields. Parent cancellation aborts the whole observation and joins
+the four table workers. Synchronous procfs operations are checked around calls;
+context cancellation cannot force a blocked syscall to return.
+
+`aggregate.LatestConnections` returns the last usable state before window end,
+without averaging socket lists or state counts. Coverage measures periodic
+availability, and source Partial flags propagate through Event.Partial. Returned
+socket/state/owner slices and optional values are copied. Successful empty data
+remain present; unavailable history remains absent. Application wiring must pass
+observation.Data/Partial and collection errors into the corresponding gauge events.
+
+Proc tables, FD links and process metadata are not an atomic snapshot. hidepid and
+ptrace restrictions, short-lived sockets/processes, and PID/inode reuse limit
+certainty; even one matched owner does not prove that no hidden owner exists.
+Future application wiring must also bound history by memory as well as sample
+count: maximum-size connection snapshots retained for a full hour can be expensive.
+Application, CLI/JSON, gRPC and client output remain unwired.
+
+Fixtures cover all table families, shared owners, duplicate endpoints, partial
+metadata, budgets, cancellation, recovery and independent windows. The real Linux
+read executed in the sandbox's namespace with empty socket tables. The opt-in
+local-socket check (`OTUS_CONNECTIONS_SMOKE=1`) was run outside the sandbox after
+local binds were denied inside it: four IPv4/IPv6 TCP/UDP sockets were verified and
+all four matched this process's PID. Ownership remained partial because other
+processes' FD directories were denied. This is not a claim of complete host-wide
+ownership visibility or Ubuntu 18.04 runtime verification.
