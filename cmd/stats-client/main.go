@@ -1,11 +1,15 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
-	fmt.Fprintln(os.Stderr, "stats-client: scaffold only; client is not implemented")
-	os.Exit(1)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := runContext(ctx, os.Args[1:], os.Stdout, os.Stderr, receive)
+	stop()
+	os.Exit(code)
 }

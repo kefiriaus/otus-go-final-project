@@ -3,7 +3,7 @@
 Финальный проект OTUS: сбор системной статистики и передача клиентам по gRPC.
 
 The daemon runs the Linux collectors and serves the Stats API over gRPC.
-The CLI client remains a scaffold until task 14.
+The CLI client streams snapshots and renders CPU usage; output for the other five sections remains follow-up work.
 
 ## Структура
 
@@ -146,7 +146,7 @@ The daemon runtime connects these workers to bounded histories and the gRPC serv
   fresh vector. Entry counts are bounded; collectors must also bound the size of
   individual values and the number of device/flow series they create.
 
-Metric-specific aggregation and daemon wiring are implemented below. Client output remains task 14.
+Metric-specific aggregation and daemon wiring are implemented below. CPU client output is documented below.
 
 ## Linux load average
 
@@ -174,8 +174,8 @@ to simulate cancellation. `RunPeriodic` also checks its measurement deadline.
 Fixture tests cover parsing, failures, recovery, and independent window reads.
 `TestLoadAverageRealLinux` checks the actual kernel source without assuming fixed
 load values; it skips only when the procfs load-average file is absent.
-Application startup, configuration switches, server delivery, and client output
-are wired through the daemon runtime; the client remains task 14.
+Application startup, configuration switches, server delivery, and CPU client output
+are wired through the daemon runtime.
 
 ## Linux CPU usage
 
@@ -455,7 +455,7 @@ Proc tables, FD links and process metadata are not an atomic snapshot. hidepid a
 ptrace restrictions, short-lived sockets/processes, and PID/inode reuse limit
 certainty; even one matched owner does not prove that no hidden owner exists.
 The daemon enforces the connection history payload budget described below.
-Collection and gRPC are wired; client output remains task 14.
+Collection, gRPC, and CPU client output are wired.
 
 Fixtures cover all table families, shared owners, duplicate endpoints, partial
 metadata, budgets, cancellation, recovery and independent windows. The real Linux
@@ -517,5 +517,28 @@ SIGINT/SIGTERM cancels subscriptions and collectors. gRPC gets five seconds for
 shutdown before forced Stop. Existing synchronous procfs/statfs calls still depend
 on the operating system returning; context cancellation cannot interrupt a blocked
 kernel syscall. Capture prerequisites and permission limitations remain as described
-in the traffic section. No automatic privilege changes are made. The CLI client and
-broader load/deployment work remain subsequent tasks.
+in the traffic section. No automatic privilege changes are made. Full six-section
+client output and broader load/deployment work remain subsequent tasks.
+
+## Running the CPU client
+
+Start the daemon, then run from the repository root:
+
+```sh
+go run ./cmd/stats-client -address 127.0.0.1:50051 -interval 5 -window 15
+```
+
+`-address` defaults to `127.0.0.1:50051`. `-interval` is N and `-window` is M;
+both accept integer seconds in 1..3600 and default to 5 and 15 respectively. The
+server may reject M above its configured `max_window_seconds`. The client uses
+insecure gRPC transport, matching the daemon's current lack of TLS/authentication.
+
+Each received snapshot prints its UTC window, CPU collection state, coverage,
+optional diagnostic and last-sample time, and user/system/idle/iowait/steal
+percentages when CPU data is present. Measured zeros remain visible; unavailable
+and disabled sections do not print percentages. Other metric sections are not
+printed by this CPU-only client.
+
+SIGINT/SIGTERM cancels the stream and exits normally. Server EOF also exits 0.
+CLI errors exit 2; connection, stream, formatting, and output failures print a
+diagnostic to stderr and exit 1. Snapshots are written to stdout.
