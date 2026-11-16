@@ -78,16 +78,17 @@ func TestRunGroupPeriodicIsolation(t *testing.T) {
 	good := make(chan Sample[int])
 	bad := make(chan Sample[int])
 	done := make(chan error, 1)
-	options := Options{5 * time.Millisecond, time.Millisecond}
+	badOptions := Options{5 * time.Millisecond, time.Millisecond}
+	goodOptions := Options{5 * time.Millisecond, time.Second}
 	go func() {
 		done <- RunGroup(ctx, func(c context.Context) error {
 			source := sourceFunc(func(c context.Context) (int, error) {
 				<-c.Done()
 				return 0, c.Err()
 			})
-			return RunPeriodic(c, source, options, bad)
+			return RunPeriodic(c, source, badOptions, bad)
 		}, func(c context.Context) error {
-			return RunPeriodic(c, sourceFunc(func(context.Context) (int, error) { return 7, nil }), options, good)
+			return RunPeriodic(c, sourceFunc(func(context.Context) (int, error) { return 7, nil }), goodOptions, good)
 		})
 	}()
 	if s := receive(t, bad); !errors.Is(s.Err, context.DeadlineExceeded) {

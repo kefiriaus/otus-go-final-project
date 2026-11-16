@@ -129,12 +129,12 @@ func TestDarwinCollectErrors(t *testing.T) {
 	invalid := darwinTestRecord("apfs", "/invalid", "/dev/invalid")
 	invalid.Mntonname[0] = -1
 	got, err := darwinTestSource([]syscall.Statfs_t{invalid, duplicate}).Collect(context.Background())
-	if err != nil || len(got.Readings) != 2 || got.Readings[1].Err == nil {
+	if err != nil || len(got.Readings) != 2 || got.Readings[0].Err == nil {
 		t.Fatalf("%+v %v", got, err)
 	}
 	empty := darwinTestRecord("apfs", "", "/dev/empty")
 	got, err = darwinTestSource([]syscall.Statfs_t{empty, duplicate}).Collect(context.Background())
-	if err != nil || len(got.Readings) != 2 || got.Readings[1].Err == nil {
+	if err != nil || len(got.Readings) != 2 || got.Readings[0].Err == nil {
 		t.Fatalf("%+v %v", got, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
