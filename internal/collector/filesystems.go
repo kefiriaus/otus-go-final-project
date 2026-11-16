@@ -143,6 +143,8 @@ func virtualFilesystem(kind string) bool {
 	switch kind {
 	case "proc",
 		"sysfs",
+		"devfs",
+		"fdesc",
 		"tmpfs",
 		"devtmpfs",
 		"devpts",

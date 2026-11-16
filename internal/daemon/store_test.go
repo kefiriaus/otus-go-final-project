@@ -18,6 +18,7 @@ import (
 
 const (
 	testFilesystemType  = "ext4"
+	testDeviceName      = "/dev/a"
 	testOriginalCommand = "original"
 )
 
@@ -149,7 +150,7 @@ func TestFilesystemBirthDoesNotReduceSectionCoverage(t *testing.T) {
 	usage := metrics.FilesystemUsage{
 		MountPoint:     "/",
 		Identity:       "a",
-		Device:         "/dev/a",
+		Device:         testDeviceName,
 		FilesystemType: testFilesystemType,
 		UsedMebibytes:  10,
 	}
@@ -180,7 +181,7 @@ func TestFilesystemFailureAndRemount(t *testing.T) {
 	a := metrics.FilesystemUsage{
 		MountPoint:     "/a",
 		Identity:       "one",
-		Device:         "/dev/a",
+		Device:         testDeviceName,
 		FilesystemType: testFilesystemType,
 		UsedMebibytes:  10,
 	}
@@ -354,6 +355,33 @@ func TestConnectionStoreOwnsNestedValues(t *testing.T) {
 	b, _ := s.Snapshot(context.Background(), w)
 	if *b.Connections.Summary.Data.ListeningSockets[0].Owners[0].Command != testOriginalCommand {
 		t.Fatal("output aliases retained history")
+	}
+}
+
+func TestFilesystemInvalidReadingsDoNotBreakSnapshots(t *testing.T) {
+	s, _ := NewStore(config.Default())
+	at := time.Unix(100, 0).UTC()
+	valid := metrics.FilesystemUsage{
+		MountPoint: "/a", Identity: "a", Device: testDeviceName, FilesystemType: "ext4", UsedMebibytes: 1,
+	}
+	readings := []metrics.FilesystemReading{
+		{MountPoint: "/a", Usage: valid},
+		{MountPoint: "/bad", Usage: valid, Err: errors.New("invalid accounting")},
+		{MountPoint: "", Usage: valid, Err: errors.New("invalid metadata")},
+		{MountPoint: "", Usage: valid, Err: errors.New("invalid metadata again")},
+	}
+	if err := s.addFilesystems(collector.Sample[metrics.FilesystemObservation]{
+		FinishedAt: at, Value: metrics.FilesystemObservation{Readings: readings},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Snapshot(context.Background(), aggregate.Window{Start: at, End: at.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Filesystems.Summary.Data == nil || !got.Filesystems.Summary.Partial ||
+		len(*got.Filesystems.Summary.Data) != 1 || (*got.Filesystems.Summary.Data)[0].MountPoint != "/a" {
+		t.Fatalf("%+v", got.Filesystems)
 	}
 }
 

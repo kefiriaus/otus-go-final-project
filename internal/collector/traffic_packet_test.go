@@ -112,6 +112,13 @@ func testTrafficVLANAndNonIP(t *testing.T) {
 	}
 }
 
+func TestTrafficPacketInterface(t *testing.T) {
+	packet, ok, err := decodeTrafficFrame(trafficFrame(101, ipv4Packet(17, 1, 2)), "en0")
+	if err != nil || !ok || packet.Interface != "en0" {
+		t.Fatalf("%+v %v", packet, err)
+	}
+}
+
 func TestTrafficPacket(t *testing.T) {
 	testTrafficIPProtocols(t)
 	testTrafficLinkTypes(t)

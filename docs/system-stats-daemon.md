@@ -42,14 +42,16 @@ go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 `make docker-build` собирает образ `otus-stats-daemon:local`; переменные
 `DOCKER_IMAGE` и `DOCKER_BUILD_ARGS` позволяют переопределить имя и аргументы build.
 
-GitHub Actions workflow `CI` запускается на push и pull request и содержит четыре
-jobs: `lint`, `test` (vet и 100 race iterations), `build` и `docker`. Локальный
-actionlint проверяет workflow-файл, но не является результатом удалённого pipeline.
+GitHub Actions workflow `CI` запускается на push и pull request и содержит пять
+jobs: `lint`, `test` (vet и 100 race iterations), `build`, `docker` и
+`filesystems-darwin` (100 race iterations for the collector and full tests on
+macOS). Локальный actionlint проверяет workflow-файл, но не является результатом
+удалённого pipeline.
 
 Контрактные тесты проверяют сериализацию, сохранение отсутствующих значений
 и измеренных нулей. Streaming behavior is covered by transport tests.
-Основная платформа — Linux; поддержка заполненности файловых систем
-на macOS запланирована отдельно.
+Основная платформа — Linux; заполненность файловых систем также собирается на macOS
+и проверяется отдельной CI job `filesystems-darwin`.
 
 Сторонние библиотеки допускаются только для gRPC/Protobuf и их транзитивных
 зависимостей. Сбор и агрегация используют стандартную библиотеку Go.
@@ -330,8 +332,27 @@ remain unchanged.
 Cancellation is checked before enumeration, between mounts, and after statfs.
 A synchronous filesystem operation can block, particularly on remote filesystems;
 context cancellation cannot force it to return. No goroutines are abandoned to
-simulate a hard timeout. macOS implementation and real second-OS execution remain
-separate work; current source availability and real verification cover Linux.
+simulate a hard timeout.
+
+## macOS filesystem usage
+
+`collector.NewFilesystemsSource` uses Darwin `getfsstat` with `MNT_NOWAIT=2` to
+read a bounded mount snapshot. It decodes mount metadata without external tools,
+filters `devfs` and `fdesc`, rejects duplicate eligible mount points, and returns
+at most 128 sorted readings from at most 1024 records. A second call that outgrows
+the allocated buffer fails rather than truncating the selection.
+
+Device and both FSID components form best-effort identity. Used space and inode
+accounting reuse the Linux formulas, including absent optional fields for zero
+capacity or unavailable inode accounting. Metadata and accounting failures remain
+per-record errors while valid siblings survive; enumeration and cancellation
+failures discard the observation. Context is checked around the synchronous
+calls, but cancellation cannot force a blocked syscall to return.
+
+The Darwin runtime constructs only the filesystem source; other subsystems report
+unavailable. Cross-compilation is used only as a build check. Actual macOS execution
+runs in the `filesystems-darwin` GitHub Actions job, which performs 100 race-enabled
+collector iterations and the full test suite on `macos-latest`.
 
 ## Linux network top talkers
 
@@ -509,7 +530,8 @@ once per second with a 900 ms timeout; tcpdump capture runs continuously. Histor
 are shared, and reading a snapshot never consumes another client's data. The store
 serializes ingestion and snapshot construction; protobuf mapping and sending occur
 outside its gate. Disabled sources are never constructed. Unsupported platform
-sources are reported unavailable; real macOS filesystem support remains task 18.
+sources are reported unavailable. On Darwin, only the filesystem source is
+constructed; other subsystems remain unavailable.
 
 Resource defaults are programmatic policies, not additional JSON keys:
 

@@ -160,7 +160,11 @@ func TestConnectionMetadataParsers(t *testing.T) {
 	}
 }
 
-const testZeroIPv6Endpoint = "00000000000000000000000000000000:0000"
+const (
+	testZeroIPv6Endpoint = "00000000000000000000000000000000:0000"
+	testIPv4Loopback     = "127.0.0.1"
+	testIPv6Loopback     = "::1"
+)
 
 func FuzzSocketTable(f *testing.F) {
 	f.Add(

@@ -48,6 +48,13 @@ func pcapRecord(order binary.ByteOrder, sec, fraction, original uint32, data []b
 	return b
 }
 
+func TestPCAPSnap(t *testing.T) {
+	header := pcapHeader(binary.LittleEndian, false, 101, maxTrafficFrameBytes)
+	if binary.LittleEndian.Uint32(header[16:]) != maxTrafficFrameBytes {
+		t.Fatal("snapshot length not preserved")
+	}
+}
+
 func TestPCAP(t *testing.T) {
 	for _, order := range []binary.ByteOrder{binary.LittleEndian, binary.BigEndian} {
 		for _, nano := range []bool{false, true} {

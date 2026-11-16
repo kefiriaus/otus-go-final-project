@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"path"
 	"sort"
 	"time"
 
@@ -189,6 +190,15 @@ func (s *Store) addFilesystemReadings(
 	success := 0
 	partial := false
 	for _, r := range readings {
+		if r.MountPoint == "" || !path.IsAbs(r.MountPoint) {
+			partial = true
+			if r.Err != nil {
+				s.details[3] = detail(r.Err)
+			} else {
+				s.details[3] = "invalid mount point"
+			}
+			continue
+		}
 		if seen[r.MountPoint] {
 			return nil, 0, false, errors.New("duplicate mount key")
 		}

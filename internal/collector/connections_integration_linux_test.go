@@ -14,11 +14,6 @@ import (
 	"github.com/kefiriaus/otus-go-final-project/internal/metrics"
 )
 
-const (
-	testIPv4Loopback = "127.0.0.1"
-	testIPv6Loopback = "::1"
-)
-
 type connectionsWindowCase struct {
 	start, end int
 	port       uint16

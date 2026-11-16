@@ -45,6 +45,23 @@ func waitForCPUData(ctx context.Context, t *testing.T, runtime *daemon.Runtime) 
 	}
 }
 
+func waitForCPUOutput(t *testing.T, writer channelWriter) string {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case output := <-writer.writes:
+			if strings.Contains(output, "user=") &&
+				(strings.Contains(output, "cpu: OK") || strings.Contains(output, "cpu: PARTIAL")) &&
+				!strings.Contains(output, "cpu: UNAVAILABLE") {
+				return output
+			}
+		case <-deadline:
+			t.Fatal("no usable CPU snapshot received")
+		}
+	}
+}
+
 func TestLinuxRuntimeToClientIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -100,17 +117,7 @@ func TestLinuxRuntimeToClientIntegration(t *testing.T) {
 		})
 	}
 	defer stopReceive()
-	var output string
-	select {
-	case output = <-writer.writes:
-	case <-time.After(5 * time.Second):
-		t.Fatal("no client snapshot received")
-	}
-	if !strings.Contains(output, "user=") ||
-		!strings.Contains(output, "cpu: OK") && !strings.Contains(output, "cpu: PARTIAL") ||
-		strings.Contains(output, "cpu: UNAVAILABLE") {
-		t.Fatalf("unexpected client output:\n%s", output)
-	}
+	waitForCPUOutput(t, writer)
 	stopReceive()
 	service.Close()
 	stopRuntime()

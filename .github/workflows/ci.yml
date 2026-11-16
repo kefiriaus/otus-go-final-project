@@ -50,3 +50,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: make docker-build
+
+  filesystems-darwin:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: 1.27.3
+          cache: true
+      - run: go test -race -count=100 ./internal/collector
+      - run: go test ./...
