@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+const allDisabledJSON = `{"subsystems":{` +
+	`"load_average":false,"cpu":false,"disk_io":false,` +
+	`"filesystems":false,"traffic":false,"connections":false}}`
+
 func TestLoadJSONDefaultsAndOverrides(t *testing.T) {
 	cpuOff := Default()
 	cpuOff.Subsystems.CPU = false
@@ -21,7 +25,11 @@ func TestLoadJSONDefaultsAndOverrides(t *testing.T) {
 		{"defaults", `{}`, Default()},
 		{"CPU disabled", `{"subsystems":{"cpu":false}}`, cpuOff},
 		{"short window", `{"max_window_seconds":60}`, short},
-		{"all disabled", `{"subsystems":{"load_average":false,"cpu":false,"disk_io":false,"filesystems":false,"traffic":false,"connections":false}}`, allOff},
+		{
+			"all disabled",
+			allDisabledJSON,
+			allOff,
+		},
 		{"duplicate field", `{"subsystems":{"cpu":true,"cpu":false}}`, cpuOff},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -32,11 +40,13 @@ func TestLoadJSONDefaultsAndOverrides(t *testing.T) {
 		})
 	}
 }
+
 func TestLoadJSONRejectsInvalidInput(t *testing.T) {
 	for _, input := range []string{
 		``, `null`, `[]`, `{"subsystems":null}`, `{"subsystems":{"cpu":null}}`, `{"max_window_seconds":null}`,
 		`{"unknown":true}`, `{"subsystems":{"unknown":true}}`, `{"port":50051}`,
-		`{"subsystems":{"cpu":"false"}}`, `{"subsystems":{"cpu":0}}`, `{"max_window_seconds":"60"}`, `{"max_window_seconds":1.5}`,
+		`{"subsystems":{"cpu":"false"}}`, `{"subsystems":{"cpu":0}}`,
+		`{"max_window_seconds":"60"}`, `{"max_window_seconds":1.5}`,
 		`{"max_window_seconds":0}`, `{"max_window_seconds":3601}`, `{`, `{} {}`, `{} garbage`,
 	} {
 		t.Run(input, func(t *testing.T) {

@@ -3,12 +3,14 @@ package aggregate
 import (
 	"fmt"
 	"path"
+	"time"
 
 	"github.com/kefiriaus/otus-go-final-project/internal/metrics"
 )
 
 func validFilesystemUsage(value metrics.FilesystemUsage, mount string) bool {
-	if value.MountPoint != mount || value.Identity == "" || value.Device == "" || value.FilesystemType == "" || !finite(value.UsedMebibytes) || value.UsedMebibytes < 0 {
+	if value.MountPoint != mount || value.Identity == "" || value.Device == "" ||
+		value.FilesystemType == "" || !finite(value.UsedMebibytes) || value.UsedMebibytes < 0 {
 		return false
 	}
 	for _, number := range []*float64{value.UsedPercent, value.UsedInodes, value.UsedInodesPercent} {
@@ -27,21 +29,34 @@ func validFilesystemUsage(value metrics.FilesystemUsage, mount string) bool {
 // MeanFilesystemUsage averages independent indicators for one mount point.
 // Only the latest contributing mount identity is used, so a remount cannot mix
 // old backing storage into the result. Optional fields use their own coverage.
-func MeanFilesystemUsage(window Window, mountPoint string, values []Interval[metrics.FilesystemUsage]) (Summary[metrics.FilesystemUsage], error) {
+func MeanFilesystemUsage(
+	window Window,
+	mountPoint string,
+	values []Interval[metrics.FilesystemUsage],
+) (Summary[metrics.FilesystemUsage], error) {
 	if !path.IsAbs(mountPoint) {
-		return Summary[metrics.FilesystemUsage]{}, fmt.Errorf("filesystem mean requires an absolute mount point")
+		return Summary[metrics.FilesystemUsage]{}, fmt.Errorf(
+			"filesystem mean requires an absolute mount point",
+		)
 	}
 	selection, err := selectIntervals(window, values)
 	if err != nil {
 		return Summary[metrics.FilesystemUsage]{}, err
 	}
 	latest := -1
+	var latestTime time.Time
 	for i, v := range values {
 		if !validFilesystemUsage(v.Value, mountPoint) {
-			return Summary[metrics.FilesystemUsage]{}, fmt.Errorf("invalid filesystem usage or metadata")
+			return Summary[metrics.FilesystemUsage]{}, fmt.Errorf(
+				"invalid filesystem usage or metadata",
+			)
 		}
-		if selection.durations[i] > 0 && (latest < 0 || v.ObservedAt.After(values[latest].ObservedAt)) {
+		if selection.durations[i] <= 0 {
+			continue
+		}
+		if latest < 0 || v.ObservedAt.After(latestTime) {
 			latest = i
+			latestTime = v.ObservedAt
 		}
 	}
 	if latest < 0 {
@@ -55,9 +70,14 @@ func MeanFilesystemUsage(window Window, mountPoint string, values []Interval[met
 			continue
 		}
 		if v.Value.Device != metadata.Device || v.Value.FilesystemType != metadata.FilesystemType {
-			return Summary[metrics.FilesystemUsage]{}, fmt.Errorf("filesystem metadata changed within one identity")
+			return Summary[metrics.FilesystemUsage]{}, fmt.Errorf(
+				"filesystem metadata changed within one identity",
+			)
 		}
-		scalar := Interval[float64]{Start: v.Start, End: v.End, ObservedAt: v.ObservedAt, Value: v.Value.UsedMebibytes, Partial: v.Partial}
+		scalar := Interval[float64]{
+			Start: v.Start, End: v.End, ObservedAt: v.ObservedAt,
+			Value: v.Value.UsedMebibytes, Partial: v.Partial,
+		}
 		base = append(base, scalar)
 		for field, number := range [3]*float64{v.Value.UsedPercent, v.Value.UsedInodes, v.Value.UsedInodesPercent} {
 			if number != nil {
@@ -70,7 +90,10 @@ func MeanFilesystemUsage(window Window, mountPoint string, values []Interval[met
 	if err != nil {
 		return Summary[metrics.FilesystemUsage]{}, err
 	}
-	data := metrics.FilesystemUsage{MountPoint: mountPoint, Device: metadata.Device, FilesystemType: metadata.FilesystemType, Identity: metadata.Identity, UsedMebibytes: *mean.Data}
+	data := metrics.FilesystemUsage{
+		MountPoint: mountPoint, Device: metadata.Device, FilesystemType: metadata.FilesystemType,
+		Identity: metadata.Identity, UsedMebibytes: *mean.Data,
+	}
 	targets := [3]**float64{&data.UsedPercent, &data.UsedInodes, &data.UsedInodesPercent}
 	partial := mean.Partial
 	for field, intervals := range optional {
@@ -83,5 +106,8 @@ func MeanFilesystemUsage(window Window, mountPoint string, values []Interval[met
 			partial = true
 		}
 	}
-	return Summary[metrics.FilesystemUsage]{Data: &data, CoverageRatio: mean.CoverageRatio, LastSampleAt: mean.LastSampleAt, Partial: partial}, nil
+	return Summary[metrics.FilesystemUsage]{
+		Data: &data, CoverageRatio: mean.CoverageRatio,
+		LastSampleAt: mean.LastSampleAt, Partial: partial,
+	}, nil
 }

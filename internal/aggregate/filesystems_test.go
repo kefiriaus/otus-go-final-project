@@ -9,12 +9,26 @@ import (
 
 func fsNumber(v float64) *float64 { return &v }
 func fsUsage(identity string, used, percentage, inodes float64) metrics.FilesystemUsage {
-	return metrics.FilesystemUsage{MountPoint: "/data", Device: "disk", FilesystemType: "ext4", Identity: identity, UsedMebibytes: used, UsedPercent: fsNumber(percentage), UsedInodes: fsNumber(inodes), UsedInodesPercent: fsNumber(inodes)}
+	return metrics.FilesystemUsage{
+		MountPoint:        "/data",
+		Device:            "disk",
+		FilesystemType:    "ext4",
+		Identity:          identity,
+		UsedMebibytes:     used,
+		UsedPercent:       fsNumber(percentage),
+		UsedInodes:        fsNumber(inodes),
+		UsedInodesPercent: fsNumber(inodes),
+	}
 }
+
 func TestMeanFilesystemUsage(t *testing.T) {
-	values := []Interval[metrics.FilesystemUsage]{interval(0, 1, fsUsage("first", 3, 75, 1)), interval(1, 2, fsUsage("first", 4, 25, 2))}
+	values := []Interval[metrics.FilesystemUsage]{
+		interval(0, 1, fsUsage("first", 3, 75, 1)),
+		interval(1, 2, fsUsage("first", 4, 25, 2)),
+	}
 	got, err := MeanFilesystemUsage(Window{at(0), at(2)}, "/data", values)
-	if err != nil || got.Data == nil || got.Partial || got.CoverageRatio != 1 || !got.LastSampleAt.Equal(at(1)) {
+	if err != nil || got.Data == nil || got.Partial || got.CoverageRatio != 1 ||
+		!got.LastSampleAt.Equal(at(1)) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	closeTo(t, got.Data.UsedMebibytes, 3.5)
@@ -26,12 +40,19 @@ func TestMeanFilesystemUsage(t *testing.T) {
 	}
 	closeTo(t, clipped.Data.UsedMebibytes, 3.5)
 	empty, err := MeanFilesystemUsage(Window{at(3), at(4)}, "/data", values)
-	if err != nil || empty.Data != nil || empty.LastSampleAt != nil || empty.Partial || empty.CoverageRatio != 0 {
+	if err != nil || empty.Data != nil || empty.LastSampleAt != nil || empty.Partial ||
+		empty.CoverageRatio != 0 {
 		t.Fatalf("%+v %v", empty, err)
 	}
 	zero := fsUsage("first", 0, 0, 0)
-	measured, err := MeanFilesystemUsage(Window{at(0), at(1)}, "/data", []Interval[metrics.FilesystemUsage]{interval(0, 1, zero)})
-	if err != nil || measured.Data == nil || measured.Data.UsedMebibytes != 0 || measured.Data.UsedPercent == nil || *measured.Data.UsedPercent != 0 {
+	measured, err := MeanFilesystemUsage(
+		Window{at(0), at(1)},
+		"/data",
+		[]Interval[metrics.FilesystemUsage]{interval(0, 1, zero)},
+	)
+	if err != nil || measured.Data == nil || measured.Data.UsedMebibytes != 0 ||
+		measured.Data.UsedPercent == nil ||
+		*measured.Data.UsedPercent != 0 {
 		t.Fatalf("%+v %v", measured, err)
 	}
 	(*got.Data.UsedPercent) = 999
@@ -39,16 +60,30 @@ func TestMeanFilesystemUsage(t *testing.T) {
 		t.Fatal("aliased caller optional field")
 	}
 }
+
 func TestMeanFilesystemUsageOptional(t *testing.T) {
 	unknown := fsUsage("first", 0, 0, 0)
 	unknown.UsedPercent = nil
 	unknown.UsedInodes = nil
 	unknown.UsedInodesPercent = nil
-	got, err := MeanFilesystemUsage(Window{at(0), at(1)}, "/data", []Interval[metrics.FilesystemUsage]{interval(0, 1, unknown)})
-	if err != nil || got.Data == nil || got.Partial || got.Data.UsedPercent != nil || got.Data.UsedInodes != nil || got.Data.UsedInodesPercent != nil {
+	got, err := MeanFilesystemUsage(
+		Window{at(0), at(1)},
+		"/data",
+		[]Interval[metrics.FilesystemUsage]{interval(0, 1, unknown)},
+	)
+	if err != nil || got.Data == nil || got.Partial || got.Data.UsedPercent != nil ||
+		got.Data.UsedInodes != nil ||
+		got.Data.UsedInodesPercent != nil {
 		t.Fatalf("%+v %v", got, err)
 	}
-	mixed, err := MeanFilesystemUsage(Window{at(0), at(2)}, "/data", []Interval[metrics.FilesystemUsage]{interval(0, 1, unknown), interval(1, 2, fsUsage("first", 4, 25, 2))})
+	mixed, err := MeanFilesystemUsage(
+		Window{at(0), at(2)},
+		"/data",
+		[]Interval[metrics.FilesystemUsage]{
+			interval(0, 1, unknown),
+			interval(1, 2, fsUsage("first", 4, 25, 2)),
+		},
+	)
 	if err != nil || !mixed.Partial || mixed.CoverageRatio != 1 {
 		t.Fatalf("%+v %v", mixed, err)
 	}
@@ -56,22 +91,35 @@ func TestMeanFilesystemUsageOptional(t *testing.T) {
 	closeTo(t, *mixed.Data.UsedInodes, 2)
 	partial := interval(0, 1, fsUsage("first", 1, 25, 1))
 	partial.Partial = true
-	p, err := MeanFilesystemUsage(Window{at(0), at(1)}, "/data", []Interval[metrics.FilesystemUsage]{partial})
+	p, err := MeanFilesystemUsage(
+		Window{at(0), at(1)},
+		"/data",
+		[]Interval[metrics.FilesystemUsage]{partial},
+	)
 	if err != nil || !p.Partial {
 		t.Fatalf("%+v %v", p, err)
 	}
 }
+
 func TestMeanFilesystemUsageIdentity(t *testing.T) {
 	old := fsUsage("old", 100, 100, 100)
 	newUsage := fsUsage("new", 1, 10, 1)
 	newUsage.Device = "newdisk"
 	newUsage.FilesystemType = "xfs"
-	got, err := MeanFilesystemUsage(Window{at(0), at(2)}, "/data", []Interval[metrics.FilesystemUsage]{interval(0, 1, old), interval(1, 2, newUsage)})
-	if err != nil || got.Data == nil || got.Data.Device != "newdisk" || got.Data.Identity != "new" || got.CoverageRatio != .5 || !got.Partial {
+	got, err := MeanFilesystemUsage(
+		Window{at(0), at(2)},
+		"/data",
+		[]Interval[metrics.FilesystemUsage]{interval(0, 1, old), interval(1, 2, newUsage)},
+	)
+	if err != nil || got.Data == nil || got.Data.Device != "newdisk" ||
+		got.Data.Identity != "new" ||
+		got.CoverageRatio != .5 ||
+		!got.Partial {
 		t.Fatalf("%+v %v", got, err)
 	}
 	closeTo(t, got.Data.UsedMebibytes, 1)
 }
+
 func TestMeanFilesystemUsageInvalid(t *testing.T) {
 	if _, err := MeanFilesystemUsage(Window{}, "/data", nil); err == nil {
 		t.Fatal("invalid window")
@@ -79,7 +127,10 @@ func TestMeanFilesystemUsageInvalid(t *testing.T) {
 	if _, err := MeanFilesystemUsage(Window{at(0), at(1)}, "relative", nil); err == nil {
 		t.Fatal("relative mount")
 	}
-	for _, mode := range []string{"mount", "identity", "device", "kind", "negative", "nan", "infinity", "percent", "inodes", "inode percent", "orphan percent"} {
+	for _, mode := range []string{
+		"mount", "identity", "device", "kind", "negative", "nan",
+		"infinity", "percent", "inodes", "inode percent", "orphan percent",
+	} {
 		v := fsUsage("first", 1, 25, 1)
 		switch mode {
 		case "mount":
@@ -105,17 +156,29 @@ func TestMeanFilesystemUsageInvalid(t *testing.T) {
 		case "orphan percent":
 			v.UsedInodes = nil
 		}
-		got, err := MeanFilesystemUsage(Window{at(0), at(1)}, "/data", []Interval[metrics.FilesystemUsage]{interval(0, 1, v)})
+		got, err := MeanFilesystemUsage(
+			Window{at(0), at(1)},
+			"/data",
+			[]Interval[metrics.FilesystemUsage]{interval(0, 1, v)},
+		)
 		if err == nil || got.Data != nil {
 			t.Fatalf("accepted %s: %+v", mode, got)
 		}
 	}
 	a, b := fsUsage("first", 1, 25, 1), fsUsage("first", 1, 25, 1)
 	b.Device = "different"
-	if _, err := MeanFilesystemUsage(Window{at(0), at(2)}, "/data", []Interval[metrics.FilesystemUsage]{interval(0, 1, a), interval(1, 2, b)}); err == nil {
+	if _, err := MeanFilesystemUsage(
+		Window{at(0), at(2)},
+		"/data",
+		[]Interval[metrics.FilesystemUsage]{interval(0, 1, a), interval(1, 2, b)},
+	); err == nil {
 		t.Fatal("metadata changed within identity")
 	}
-	if _, err := MeanFilesystemUsage(Window{at(0), at(2)}, "/data", []Interval[metrics.FilesystemUsage]{interval(0, 2, a), interval(1, 2, a)}); err == nil {
+	if _, err := MeanFilesystemUsage(
+		Window{at(0), at(2)},
+		"/data",
+		[]Interval[metrics.FilesystemUsage]{interval(0, 2, a), interval(1, 2, a)},
+	); err == nil {
 		t.Fatal("overlap")
 	}
 }

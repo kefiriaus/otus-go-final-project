@@ -10,9 +10,11 @@ import (
 	"github.com/kefiriaus/otus-go-final-project/internal/metrics"
 )
 
-const maxMountInfoBytes = 1 << 20
-const maxMountRecords = 1024
-const maxFilesystemMounts = 128
+const (
+	maxMountInfoBytes   = 1 << 20
+	maxMountRecords     = 1024
+	maxFilesystemMounts = 128
+)
 
 type filesystemMount struct {
 	ID             uint64
@@ -62,6 +64,55 @@ func decodeMountField(value string) (string, error) {
 	return out.String(), nil
 }
 
+func parseMountLine(line string, index int, ids map[uint64]bool) (filesystemMount, error) {
+	fields := strings.FieldsFunc(line, func(r rune) bool { return r == ' ' || r == '\t' })
+	separator := -1
+	for j := 6; j < len(fields); j++ {
+		if fields[j] == "-" {
+			separator = j
+			break
+		}
+	}
+	if separator < 6 || len(fields) != separator+4 {
+		return filesystemMount{}, fmt.Errorf("mountinfo line %d: malformed fields", index+1)
+	}
+	id, err := strconv.ParseUint(fields[0], 10, 64)
+	if err != nil {
+		return filesystemMount{}, fmt.Errorf("mount ID: %w", err)
+	}
+	parent, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return filesystemMount{}, fmt.Errorf("parent mount ID: %w", err)
+	}
+	if id == 0 || ids[id] {
+		return filesystemMount{}, fmt.Errorf("zero or duplicate mount ID")
+	}
+	ids[id] = true
+	majorMinor, err := parseDiskDeviceIdentity([]byte(fields[2]))
+	if err != nil {
+		return filesystemMount{}, fmt.Errorf("mount device: %w", err)
+	}
+	root, err := decodeMountField(fields[3])
+	if err != nil {
+		return filesystemMount{}, err
+	}
+	mount, err := decodeMountField(fields[4])
+	if err != nil {
+		return filesystemMount{}, err
+	}
+	device, err := decodeMountField(fields[separator+2])
+	if err != nil {
+		return filesystemMount{}, err
+	}
+	if !path.IsAbs(mount) {
+		return filesystemMount{}, fmt.Errorf("mount point must be absolute")
+	}
+	return filesystemMount{
+		ID: id, ParentID: parent, MajorMinor: majorMinor, Root: root,
+		MountPoint: mount, Device: device, FilesystemType: fields[separator+1],
+	}, nil
+}
+
 func parseMountInfo(data []byte) ([]filesystemMount, error) {
 	if len(data) > maxMountInfoBytes {
 		return nil, fmt.Errorf("mountinfo exceeds byte limit")
@@ -79,59 +130,81 @@ func parseMountInfo(data []byte) ([]filesystemMount, error) {
 		if len(result) >= maxMountRecords {
 			return nil, fmt.Errorf("mountinfo exceeds record limit")
 		}
-		fields := strings.FieldsFunc(line, func(r rune) bool { return r == ' ' || r == '\t' })
-		separator := -1
-		for j := 6; j < len(fields); j++ {
-			if fields[j] == "-" {
-				separator = j
-				break
-			}
-		}
-		if separator < 6 || len(fields) != separator+4 {
-			return nil, fmt.Errorf("mountinfo line %d: malformed fields", i+1)
-		}
-		id, err := strconv.ParseUint(fields[0], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("mount ID: %w", err)
-		}
-		parent, err := strconv.ParseUint(fields[1], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parent mount ID: %w", err)
-		}
-		if id == 0 || ids[id] {
-			return nil, fmt.Errorf("zero or duplicate mount ID")
-		}
-		ids[id] = true
-		majorMinor, err := parseDiskDeviceIdentity([]byte(fields[2]))
-		if err != nil {
-			return nil, fmt.Errorf("mount device: %w", err)
-		}
-		root, err := decodeMountField(fields[3])
+		mount, err := parseMountLine(line, i, ids)
 		if err != nil {
 			return nil, err
 		}
-		mount, err := decodeMountField(fields[4])
-		if err != nil {
-			return nil, err
-		}
-		device, err := decodeMountField(fields[separator+2])
-		if err != nil {
-			return nil, err
-		}
-		if !path.IsAbs(mount) {
-			return nil, fmt.Errorf("mount point must be absolute")
-		}
-		result = append(result, filesystemMount{ID: id, ParentID: parent, MajorMinor: majorMinor, Root: root, MountPoint: mount, Device: device, FilesystemType: fields[separator+1]})
+		result = append(result, mount)
 	}
 	return result, nil
 }
 
 func virtualFilesystem(kind string) bool {
 	switch kind {
-	case "proc", "sysfs", "tmpfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "securityfs", "pstore", "debugfs", "tracefs", "configfs", "fusectl", "hugetlbfs", "mqueue", "binfmt_misc", "rpc_pipefs", "nsfs", "autofs", "bpf", "selinuxfs", "efivarfs", "ramfs", "rootfs", "overlay", "aufs":
+	case "proc",
+		"sysfs",
+		"tmpfs",
+		"devtmpfs",
+		"devpts",
+		"cgroup",
+		"cgroup2",
+		"securityfs",
+		"pstore",
+		"debugfs",
+		"tracefs",
+		"configfs",
+		"fusectl",
+		"hugetlbfs",
+		"mqueue",
+		"binfmt_misc",
+		"rpc_pipefs",
+		"nsfs",
+		"autofs",
+		"bpf",
+		"selinuxfs",
+		"efivarfs",
+		"ramfs",
+		"rootfs",
+		"overlay",
+		"aufs":
 		return true
 	}
 	return false
+}
+
+func hiddenFilesystemMount(
+	mount filesystemMount,
+	byID map[uint64]filesystemMount,
+	covered map[uint64]bool,
+) bool {
+	current := mount
+	for {
+		parent, ok := byID[current.ParentID]
+		if !ok || parent.ID == current.ID {
+			return false
+		}
+		if parent.MountPoint != current.MountPoint && covered[parent.ID] {
+			return true
+		}
+		current = parent
+	}
+}
+
+func filterVisibleFilesystems(visible map[string]filesystemMount) ([]filesystemMount, error) {
+	var result []filesystemMount
+	for _, m := range visible {
+		if virtualFilesystem(m.FilesystemType) {
+			continue
+		}
+		if len(result) >= maxFilesystemMounts {
+			return nil, fmt.Errorf("filesystem selection exceeds mount limit")
+		}
+		result = append(result, m)
+	}
+	slices.SortFunc(result, func(a, b filesystemMount) int {
+		return strings.Compare(a.MountPoint, b.MountPoint)
+	})
+	return result, nil
 }
 
 func visibleFilesystemMounts(mounts []filesystemMount) ([]filesystemMount, error) {
@@ -154,7 +227,8 @@ func visibleFilesystemMounts(mounts []filesystemMount) ([]filesystemMount, error
 			}
 			current = parent
 		}
-		if parent, ok := byID[m.ParentID]; ok && parent.ID != m.ID && parent.MountPoint == m.MountPoint {
+		if parent, ok := byID[m.ParentID]; ok && parent.ID != m.ID &&
+			parent.MountPoint == m.MountPoint {
 			covered[parent.ID] = true
 		}
 	}
@@ -163,19 +237,7 @@ func visibleFilesystemMounts(mounts []filesystemMount) ([]filesystemMount, error
 		if covered[m.ID] {
 			continue
 		}
-		current, hidden := m, false
-		for {
-			parent, ok := byID[current.ParentID]
-			if !ok || parent.ID == current.ID {
-				break
-			}
-			if parent.MountPoint != current.MountPoint && covered[parent.ID] {
-				hidden = true
-				break
-			}
-			current = parent
-		}
-		if hidden {
+		if hiddenFilesystemMount(m, byID, covered) {
 			continue
 		}
 		if _, exists := visible[m.MountPoint]; exists {
@@ -183,18 +245,7 @@ func visibleFilesystemMounts(mounts []filesystemMount) ([]filesystemMount, error
 		}
 		visible[m.MountPoint] = m
 	}
-	var result []filesystemMount
-	for _, m := range visible {
-		if virtualFilesystem(m.FilesystemType) {
-			continue
-		}
-		if len(result) >= maxFilesystemMounts {
-			return nil, fmt.Errorf("filesystem selection exceeds mount limit")
-		}
-		result = append(result, m)
-	}
-	slices.SortFunc(result, func(a, b filesystemMount) int { return strings.Compare(a.MountPoint, b.MountPoint) })
-	return result, nil
+	return filterVisibleFilesystems(visible)
 }
 
 func filesystemUsage(m filesystemMount, s filesystemStats) (metrics.FilesystemUsage, error) {
@@ -202,7 +253,13 @@ func filesystemUsage(m filesystemMount, s filesystemStats) (metrics.FilesystemUs
 		return metrics.FilesystemUsage{}, fmt.Errorf("invalid filesystem total/free accounting")
 	}
 	used := s.Blocks - s.FreeBlocks
-	result := metrics.FilesystemUsage{MountPoint: m.MountPoint, Device: m.Device, FilesystemType: m.FilesystemType, Identity: fmt.Sprintf("%d:%s:%s", m.ID, m.MajorMinor, m.Root), UsedMebibytes: float64(used) * (float64(s.BlockSize) / (1024 * 1024))}
+	result := metrics.FilesystemUsage{
+		MountPoint:     m.MountPoint,
+		Device:         m.Device,
+		FilesystemType: m.FilesystemType,
+		Identity:       fmt.Sprintf("%d:%s:%s", m.ID, m.MajorMinor, m.Root),
+		UsedMebibytes:  float64(used) * (float64(s.BlockSize) / (1024 * 1024)),
+	}
 	if s.Blocks > 0 {
 		percentage := float64(used) / float64(s.Blocks) * 100
 		result.UsedPercent = &percentage

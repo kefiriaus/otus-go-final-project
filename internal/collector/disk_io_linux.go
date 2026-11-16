@@ -31,7 +31,10 @@ func (s *DiskIOSource) devices(ctx context.Context) ([]string, error) {
 	}
 	dir, ok := file.(fs.ReadDirFile)
 	if !ok {
-		return nil, errors.Join(fmt.Errorf("/sys/block does not support directory enumeration"), file.Close())
+		return nil, errors.Join(
+			fmt.Errorf("/sys/block does not support directory enumeration"),
+			file.Close(),
+		)
 	}
 	var entries []fs.DirEntry
 	var readErr error
@@ -42,7 +45,7 @@ func (s *DiskIOSource) devices(ctx context.Context) ([]string, error) {
 		var batch []fs.DirEntry
 		batch, readErr = dir.ReadDir(maxDiskDevices + 1 - len(entries))
 		entries = append(entries, batch...)
-		if readErr == io.EOF {
+		if errors.Is(readErr, io.EOF) {
 			readErr = nil
 			break
 		}
@@ -98,7 +101,10 @@ func (s *DiskIOSource) readFile(ctx context.Context, name string, limit int) ([]
 	return data, nil
 }
 
-func (s *DiskIOSource) readDevice(ctx context.Context, device string) (metrics.DiskIOCounters, error) {
+func (s *DiskIOSource) readDevice(
+	ctx context.Context,
+	device string,
+) (metrics.DiskIOCounters, error) {
 	dev, err := s.readFile(ctx, "block/"+device+"/dev", 128)
 	if err != nil {
 		return metrics.DiskIOCounters{}, err
@@ -125,7 +131,10 @@ func (s *DiskIOSource) readDevice(ctx context.Context, device string) (metrics.D
 		return metrics.DiskIOCounters{}, fmt.Errorf("device %s identity recheck: %w", device, err)
 	}
 	if currentIdentity != identity {
-		return metrics.DiskIOCounters{}, fmt.Errorf("device %s identity changed during collection", device)
+		return metrics.DiskIOCounters{}, fmt.Errorf(
+			"device %s identity changed during collection",
+			device,
+		)
 	}
 	counters.Identity = identity
 	return counters, nil
@@ -154,7 +163,10 @@ func (s *DiskIOSource) Collect(ctx context.Context) (metrics.DiskIOObservation, 
 		if cause := ctx.Err(); cause != nil {
 			return metrics.DiskIOObservation{}, cause
 		}
-		result.Readings = append(result.Readings, metrics.DiskIOReading{Device: device, Counters: counters, Err: err})
+		result.Readings = append(
+			result.Readings,
+			metrics.DiskIOReading{Device: device, Counters: counters, Err: err},
+		)
 	}
 	if err := ctx.Err(); err != nil {
 		return metrics.DiskIOObservation{}, err

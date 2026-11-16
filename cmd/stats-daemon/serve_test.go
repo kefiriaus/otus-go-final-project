@@ -21,22 +21,35 @@ func TestRunServingResult(t *testing.T) {
 	}{{nil, 0}, {errors.New("bind failure"), 1}, {context.Canceled, 0}} {
 		var stdout, stderr bytes.Buffer
 		called := false
-		code := runContext(context.Background(), []string{"-port", "12345"}, &stdout, &stderr, func(_ context.Context, cfg config.Config) error {
-			called = true
-			if cfg.Port != 12345 {
-				t.Fatal(cfg)
-			}
-			return test.err
-		})
+		code := runContext(
+			context.Background(),
+			[]string{portFlag, "12345"},
+			&stdout,
+			&stderr,
+			func(_ context.Context, cfg config.Config) error {
+				called = true
+				if cfg.Port != 12345 {
+					t.Fatal(cfg)
+				}
+				return test.err
+			},
+		)
 		if !called || code != test.code {
 			t.Fatalf("called=%v code=%d", called, code)
 		}
 	}
 }
+
 func TestHelpSkipsServing(t *testing.T) {
-	for _, args := range [][]string{{"-h"}, {"-port", "0"}} {
+	for _, args := range [][]string{{"-h"}, {portFlag, "0"}} {
 		var out bytes.Buffer
-		runContext(context.Background(), args, &out, &out, func(context.Context, config.Config) error { t.Fatal("unexpected serving"); return nil })
+		runContext(
+			context.Background(), args, &out, &out,
+			func(context.Context, config.Config) error {
+				t.Fatal("unexpected serving")
+				return nil
+			},
+		)
 	}
 }
 
@@ -53,9 +66,11 @@ func (r *fakeRuntime) Run(ctx context.Context) error {
 	<-ctx.Done()
 	return ctx.Err()
 }
+
 func (r *fakeRuntime) Snapshot(context.Context, aggregate.Window) (daemon.Snapshot, error) {
 	return daemon.Snapshot{}, nil
 }
+
 func TestServeCancellationAndFailure(t *testing.T) {
 	for _, failure := range []error{nil, errors.New("runtime failed")} {
 		t.Run(fmtError(failure), func(t *testing.T) {
@@ -65,7 +80,7 @@ func TestServeCancellationAndFailure(t *testing.T) {
 			r := &fakeRuntime{started: make(chan struct{}), failure: failure}
 			done := make(chan error, 1)
 			go func() {
-				done <- serveWith(ctx, config.Default(), func(network, address string) (net.Listener, error) {
+				done <- serveWith(ctx, config.Default(), func(_, address string) (net.Listener, error) {
 					if address != ":50051" {
 						t.Error(address)
 					}
@@ -82,7 +97,8 @@ func TestServeCancellationAndFailure(t *testing.T) {
 			}
 			select {
 			case err := <-done:
-				if failure == nil && !errors.Is(err, context.Canceled) || failure != nil && !errors.Is(err, failure) {
+				if failure == nil && !errors.Is(err, context.Canceled) ||
+					failure != nil && !errors.Is(err, failure) {
 					t.Fatal(err)
 				}
 			case <-time.After(time.Second):
@@ -91,18 +107,22 @@ func TestServeCancellationAndFailure(t *testing.T) {
 		})
 	}
 }
+
 func fmtError(err error) string {
 	if err == nil {
 		return "cancel"
 	}
 	return "failure"
 }
+
 func TestListenFailureStartsNoRuntime(t *testing.T) {
 	sentinel := errors.New("bind failed")
-	err := serveWith(context.Background(), config.Default(), func(string, string) (net.Listener, error) { return nil, sentinel }, func(config.Config) (runtimeService, error) {
+	listen := func(string, string) (net.Listener, error) { return nil, sentinel }
+	makeRuntime := func(config.Config) (runtimeService, error) {
 		t.Fatal("constructed runtime after listen failure")
 		return nil, nil
-	})
+	}
+	err := serveWith(context.Background(), config.Default(), listen, makeRuntime)
 	if !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}

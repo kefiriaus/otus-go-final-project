@@ -22,7 +22,12 @@ type Subsystems struct {
 // Default returns an independent configuration with all collectors enabled.
 func Default() Config {
 	return Config{Port: 50051, MaxWindowSeconds: 3600, Subsystems: Subsystems{
-		LoadAverage: true, CPU: true, DiskIO: true, Filesystems: true, Traffic: true, Connections: true,
+		LoadAverage: true,
+		CPU:         true,
+		DiskIO:      true,
+		Filesystems: true,
+		Traffic:     true,
+		Connections: true,
 	}}
 }
 

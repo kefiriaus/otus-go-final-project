@@ -20,9 +20,20 @@ type runtimeService interface {
 }
 
 func serve(ctx context.Context, cfg config.Config) error {
-	return serveWith(ctx, cfg, net.Listen, func(c config.Config) (runtimeService, error) { return daemon.NewRuntime(c) })
+	return serveWith(
+		ctx,
+		cfg,
+		net.Listen,
+		func(c config.Config) (runtimeService, error) { return daemon.NewRuntime(c) },
+	)
 }
-func serveWith(ctx context.Context, cfg config.Config, listen func(string, string) (net.Listener, error), makeRuntime func(config.Config) (runtimeService, error)) error {
+
+func serveWith(
+	ctx context.Context,
+	cfg config.Config,
+	listen func(string, string) (net.Listener, error),
+	makeRuntime func(config.Config) (runtimeService, error),
+) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -38,7 +49,10 @@ func serveWith(ctx context.Context, cfg config.Config, listen func(string, strin
 	if err != nil {
 		return err
 	}
-	service, err := transport.NewServer(runtime, transport.Options{MaxWindowSeconds: cfg.MaxWindowSeconds})
+	service, err := transport.NewServer(
+		runtime,
+		transport.Options{MaxWindowSeconds: cfg.MaxWindowSeconds},
+	)
 	if err != nil {
 		return err
 	}

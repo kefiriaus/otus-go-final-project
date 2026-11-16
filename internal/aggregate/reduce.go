@@ -54,10 +54,14 @@ func selectIntervals[T any](window Window, values []Interval[T]) (selection, err
 	}
 	return result, nil
 }
+
 func summarized[T any](window Window, s selection, value T, last time.Time) Summary[T] {
 	timestamp := last.UTC()
 	coverage := float64(s.covered) / float64(window.End.Sub(window.Start))
-	return Summary[T]{Data: &value, CoverageRatio: coverage, LastSampleAt: &timestamp, Partial: s.partial || s.covered < window.End.Sub(window.Start)}
+	return Summary[T]{
+		Data: &value, CoverageRatio: coverage, LastSampleAt: &timestamp,
+		Partial: s.partial || s.covered < window.End.Sub(window.Start),
+	}
 }
 func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 
@@ -129,7 +133,8 @@ func Latest[T any](window Window, values []Interval[T]) (Summary[T], error) {
 	}
 	selected := -1
 	for i, v := range values {
-		if s.durations[i] > 0 && v.ObservedAt.Before(window.End) && (selected < 0 || v.ObservedAt.After(values[selected].ObservedAt)) {
+		if s.durations[i] > 0 && v.ObservedAt.Before(window.End) &&
+			(selected < 0 || v.ObservedAt.After(values[selected].ObservedAt)) {
 			selected = i
 		}
 	}

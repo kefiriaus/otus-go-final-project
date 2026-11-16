@@ -11,13 +11,81 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func (s *Server) Subscribe(req *statsv1.SubscribeRequest, stream grpc.ServerStreamingServer[statsv1.Snapshot]) error {
+func startSnapshotSender(
+	ctx context.Context,
+	stream grpc.ServerStreamingServer[statsv1.Snapshot],
+) (chan *statsv1.Snapshot, chan error) {
+	jobs := make(chan *statsv1.Snapshot, 1)
+	results := make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case value := <-jobs:
+				if ctx.Err() != nil {
+					return
+				}
+				err := stream.Send(value)
+				select {
+				case results <- err:
+				case <-ctx.Done():
+					return
+				}
+				if err != nil {
+					return
+				}
+			}
+		}
+	}()
+	return jobs, results
+}
+
+func (s *Server) scheduledSnapshot(
+	ctx context.Context,
+	schedule aggregate.Schedule,
+	now time.Time,
+) (*statsv1.Snapshot, time.Time, error) {
+	deadline := schedule.NextAfter(now).Add(-schedule.Interval)
+	if now.Before(schedule.First) {
+		deadline = schedule.First
+	}
+	value, err := s.provider.Snapshot(ctx, schedule.WindowAt(deadline))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, time.Time{}, status.FromContextError(ctx.Err()).Err()
+		}
+		return nil, time.Time{}, status.Error(codes.Internal, "snapshot construction failed")
+	}
+	value.GeneratedAt = s.clock.Now().UTC()
+	mapped, err := mapSnapshot(value)
+	if err != nil {
+		return nil, time.Time{}, status.Error(codes.Internal, "invalid snapshot")
+	}
+	return mapped, s.clock.Now(), nil
+}
+
+func (s *Server) Subscribe(
+	req *statsv1.SubscribeRequest,
+	stream grpc.ServerStreamingServer[statsv1.Snapshot],
+) error {
 	// Validate uint32 values before converting to int, including on 32-bit hosts.
-	if req == nil || req.IntervalSeconds < 1 || req.IntervalSeconds > 3600 || req.WindowSeconds < 1 || req.WindowSeconds > uint32(s.options.MaxWindowSeconds) {
-		return status.Error(codes.InvalidArgument, "N must be 1..3600 and M must be 1..server maximum")
+	// #nosec G115 -- NewServer constrains MaxWindowSeconds to 1..3600 before this conversion.
+	if req == nil || req.IntervalSeconds < 1 || req.IntervalSeconds > 3600 ||
+		req.WindowSeconds < 1 ||
+		req.WindowSeconds > uint32(s.options.MaxWindowSeconds) {
+		return status.Error(
+			codes.InvalidArgument,
+			"N must be 1..3600 and M must be 1..server maximum",
+		)
 	}
 	accepted := s.clock.Now()
-	schedule, err := aggregate.NewSchedule(accepted, int(req.IntervalSeconds), int(req.WindowSeconds), s.options.MaxWindowSeconds)
+	schedule, err := aggregate.NewSchedule(
+		accepted,
+		int(req.IntervalSeconds),
+		int(req.WindowSeconds),
+		s.options.MaxWindowSeconds,
+	)
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -36,29 +104,7 @@ func (s *Server) Subscribe(req *statsv1.SubscribeRequest, stream grpc.ServerStre
 	}
 	// Exactly one sender lives for this RPC. Returning the handler cancels the
 	// transport stream, allowing an in-flight Send to unwind after a timeout.
-	jobs := make(chan *statsv1.Snapshot, 1)
-	results := make(chan error, 1)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case v := <-jobs:
-				if ctx.Err() != nil {
-					return
-				}
-				err := stream.Send(v)
-				select {
-				case results <- err:
-				case <-ctx.Done():
-					return
-				}
-				if err != nil {
-					return
-				}
-			}
-		}
-	}()
+	jobs, results := startSnapshotSender(ctx, stream)
 	next := s.clock.NewTimer(schedule.First.Sub(accepted))
 	defer func() { next.Stop() }()
 	var sendTimer timer
@@ -87,24 +133,11 @@ func (s *Server) Subscribe(req *statsv1.SubscribeRequest, stream grpc.ServerStre
 				return err
 			}
 		case <-next.C():
-			now := s.clock.Now()
-			deadline := schedule.NextAfter(now).Add(-schedule.Interval)
-			if now.Before(schedule.First) {
-				deadline = schedule.First
-			}
-			value, err := s.provider.Snapshot(ctx, schedule.WindowAt(deadline))
+			var after time.Time
+			pending, after, err = s.scheduledSnapshot(ctx, schedule, s.clock.Now())
 			if err != nil {
-				if ctx.Err() != nil {
-					return status.FromContextError(ctx.Err()).Err()
-				}
-				return status.Error(codes.Internal, "snapshot construction failed")
+				return err
 			}
-			value.GeneratedAt = s.clock.Now().UTC()
-			pending, err = mapSnapshot(value)
-			if err != nil {
-				return status.Error(codes.Internal, "invalid snapshot")
-			}
-			after := s.clock.Now()
 			next = s.clock.NewTimer(schedule.NextAfter(after).Sub(after))
 		}
 		if !sending && pending != nil {

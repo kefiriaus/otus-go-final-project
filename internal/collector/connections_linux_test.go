@@ -14,6 +14,14 @@ import (
 	"time"
 )
 
+const (
+	testCloseMode     = "close"
+	testReadMode      = "read"
+	testOpenMode      = "open"
+	testParseMode     = "parse"
+	testOversizedMode = "oversized"
+)
+
 func procSocketEndpoint(ip string, port uint16) string {
 	address := netip.MustParseAddr(ip)
 	raw := address.AsSlice()
@@ -24,6 +32,7 @@ func procSocketEndpoint(ip string, port uint16) string {
 	fmt.Fprintf(&out, ":%04X", port)
 	return out.String()
 }
+
 func connectionsFixture() fstest.MapFS {
 	result := ownerFixture()
 	for _, table := range []string{"tcp", "tcp6", "udp", "udp6"} {
@@ -31,20 +40,79 @@ func connectionsFixture() fstest.MapFS {
 	}
 	return result
 }
+
 func TestConnectionsSource(t *testing.T) {
 	fixture := connectionsFixture()
 	local := procSocketEndpoint("127.0.0.1", 8080)
 	remote := procSocketEndpoint("0.0.0.0", 0)
-	fixture["self/net/tcp"].Data = []byte(socketTableHeader + socketLine(0, local, remote, "0A", 123) + socketLine(1, local, remote, "0A", 124) + socketLine(2, local, remote, "01", 125) + socketLine(3, local, remote, "FF", 0))
-	fixture["self/net/udp"].Data = []byte(socketTableHeader + socketLine(0, procSocketEndpoint("0.0.0.0", 53), remote, "07", 126) + socketLine(1, procSocketEndpoint("127.0.0.1", 54), procSocketEndpoint("127.0.0.1", 55), "01", 127) + socketLine(2, remote, remote, "07", 0))
-	fixture["self/net/tcp6"].Data = []byte(socketTableHeader + socketLine(0, procSocketEndpoint("::1", 8081), procSocketEndpoint("::", 0), "0A", 128))
+	fixture["self/net/tcp"].Data = []byte(
+		socketTableHeader + socketLine(
+			0,
+			local,
+			remote,
+			"0A",
+			123,
+		) + socketLine(
+			1,
+			local,
+			remote,
+			"0A",
+			124,
+		) + socketLine(
+			2,
+			local,
+			remote,
+			"01",
+			125,
+		) + socketLine(
+			3,
+			local,
+			remote,
+			"FF",
+			0,
+		),
+	)
+	fixture["self/net/udp"].Data = []byte(
+		socketTableHeader + socketLine(
+			0,
+			procSocketEndpoint("0.0.0.0", 53),
+			remote,
+			"07",
+			126,
+		) + socketLine(
+			1,
+			procSocketEndpoint("127.0.0.1", 54),
+			procSocketEndpoint("127.0.0.1", 55),
+			"01",
+			127,
+		) + socketLine(
+			2,
+			remote,
+			remote,
+			"07",
+			0,
+		),
+	)
+	fixture["self/net/tcp6"].Data = []byte(
+		socketTableHeader + socketLine(
+			0,
+			procSocketEndpoint("::1", 8081),
+			procSocketEndpoint("::", 0),
+			"0A",
+			128,
+		),
+	)
 	for i, inode := range []int{124, 126, 127, 128} {
-		fixture[fmt.Sprintf("42/fd/%d", 6+i)] = &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte(fmt.Sprintf("socket:[%d]", inode))}
+		fixture[fmt.Sprintf("42/fd/%d", 6+i)] = &fstest.MapFile{
+			Mode: fs.ModeSymlink,
+			Data: []byte(fmt.Sprintf("socket:[%d]", inode)),
+		}
 	}
 	source, _ := NewConnectionsSource(DefaultConnectionsOptions())
 	source.procFS = fixture
 	got, err := source.Collect(context.Background())
-	if err != nil || got.Partial || len(got.Data.ListeningSockets) != 5 || len(got.Data.TCPStates) != 3 {
+	if err != nil || got.Partial || len(got.Data.ListeningSockets) != 5 ||
+		len(got.Data.TCPStates) != 3 {
 		t.Fatalf("%+v %v", got, err)
 	}
 	counts := map[string]uint64{}
@@ -67,12 +135,14 @@ func TestConnectionsSource(t *testing.T) {
 		t.Fatal("merged distinct sockets sharing one endpoint")
 	}
 }
+
 func TestConnectionsSourcePartialAndEmpty(t *testing.T) {
 	source, _ := NewConnectionsSource(DefaultConnectionsOptions())
 	fixture := connectionsFixture()
 	source.procFS = fixture
 	empty, err := source.Collect(context.Background())
-	if err != nil || empty.Partial || len(empty.Data.ListeningSockets) != 0 || len(empty.Data.TCPStates) != 0 {
+	if err != nil || empty.Partial || len(empty.Data.ListeningSockets) != 0 ||
+		len(empty.Data.TCPStates) != 0 {
 		t.Fatalf("%+v %v", empty, err)
 	}
 	delete(fixture, "self/net/tcp6")
@@ -92,23 +162,48 @@ func TestConnectionsSourcePartialAndEmpty(t *testing.T) {
 		t.Fatalf("%+v %v", partial, err)
 	}
 	fixture = connectionsFixture()
-	fixture["self/net/tcp"].Data = []byte(socketTableHeader + socketLine(0, procSocketEndpoint("0.0.0.0", 80), procSocketEndpoint("0.0.0.0", 0), "0A", 999))
+	fixture["self/net/tcp"].Data = []byte(
+		socketTableHeader + socketLine(
+			0,
+			procSocketEndpoint("0.0.0.0", 80),
+			procSocketEndpoint("0.0.0.0", 0),
+			"0A",
+			999,
+		),
+	)
 	source.procFS = fixture
 	partial, err = source.Collect(context.Background())
-	if err != nil || !partial.Partial || len(partial.Data.ListeningSockets) != 1 || len(partial.Data.ListeningSockets[0].Owners) != 0 {
+	if err != nil || !partial.Partial || len(partial.Data.ListeningSockets) != 1 ||
+		len(partial.Data.ListeningSockets[0].Owners) != 0 {
 		t.Fatalf("%+v %v", partial, err)
 	}
 }
+
 func TestConnectionsSourceLimitsAndDuplicate(t *testing.T) {
 	o := DefaultConnectionsOptions()
 	o.MaxListeningSockets = 1
 	source, _ := NewConnectionsSource(o)
 	fixture := connectionsFixture()
-	row := socketLine(0, procSocketEndpoint("0.0.0.0", 80), procSocketEndpoint("0.0.0.0", 0), "0A", 123)
-	fixture["self/net/tcp"].Data = []byte(socketTableHeader + row + socketLine(1, procSocketEndpoint("0.0.0.0", 81), procSocketEndpoint("0.0.0.0", 0), "0A", 124))
+	row := socketLine(
+		0,
+		procSocketEndpoint("0.0.0.0", 80),
+		procSocketEndpoint("0.0.0.0", 0),
+		"0A",
+		123,
+	)
+	fixture["self/net/tcp"].Data = []byte(
+		socketTableHeader + row + socketLine(
+			1,
+			procSocketEndpoint("0.0.0.0", 81),
+			procSocketEndpoint("0.0.0.0", 0),
+			"0A",
+			124,
+		),
+	)
 	source.procFS = fixture
 	got, err := source.Collect(context.Background())
-	if err != nil || !got.Partial || len(got.Data.ListeningSockets) != 1 || got.Data.TCPStates[0].Count != 2 {
+	if err != nil || !got.Partial || len(got.Data.ListeningSockets) != 1 ||
+		got.Data.TCPStates[0].Count != 2 {
 		t.Fatalf("%+v %v", got, err)
 	}
 	fixture["self/net/tcp"].Data = []byte(socketTableHeader + row + row)
@@ -130,7 +225,14 @@ func TestConnectionsSourceLimitsAndDuplicate(t *testing.T) {
 	if _, err := source.Collect(context.Background()); err == nil {
 		t.Fatal("per-table row cap")
 	}
-	for _, mutate := range []func(*ConnectionsOptions){func(o *ConnectionsOptions) { o.MaxSocketRows = 0 }, func(o *ConnectionsOptions) { o.MaxProcesses = 8193 }, func(o *ConnectionsOptions) { o.MaxFDs = 131073 }, func(o *ConnectionsOptions) { o.MaxFDsPerProcess = 8193 }, func(o *ConnectionsOptions) { o.MaxOwnersPerSocket = 33 }, func(o *ConnectionsOptions) { o.OwnerTimeout = 0 }} {
+	for _, mutate := range []func(*ConnectionsOptions){
+		func(o *ConnectionsOptions) { o.MaxSocketRows = 0 },
+		func(o *ConnectionsOptions) { o.MaxProcesses = 8193 },
+		func(o *ConnectionsOptions) { o.MaxFDs = 131073 },
+		func(o *ConnectionsOptions) { o.MaxFDsPerProcess = 8193 },
+		func(o *ConnectionsOptions) { o.MaxOwnersPerSocket = 33 },
+		func(o *ConnectionsOptions) { o.OwnerTimeout = 0 },
+	} {
 		o := DefaultConnectionsOptions()
 		mutate(&o)
 		if _, err := NewConnectionsSource(o); err == nil {
@@ -138,6 +240,7 @@ func TestConnectionsSourceLimitsAndDuplicate(t *testing.T) {
 		}
 	}
 }
+
 func TestConnectionsSourceConcurrentAndCancellation(t *testing.T) {
 	source, _ := NewConnectionsSource(DefaultConnectionsOptions())
 	fixture := connectionsFixture()
@@ -204,21 +307,22 @@ func TestConnectionsSourceCancelsAndJoinsReaders(t *testing.T) {
 		t.Fatalf("%v opened=%d closed=%d", err, opened.Load(), closed.Load())
 	}
 }
+
 func TestConnectionFileReadBoundsAndErrors(t *testing.T) {
 	source, _ := NewConnectionsSource(DefaultConnectionsOptions())
 	sentinel := errors.New("file failure")
-	for _, mode := range []string{"bound", "read", "close"} {
+	for _, mode := range []string{"bound", testReadMode, testCloseMode} {
 		reader := strings.NewReader(strings.Repeat("x", 200))
 		consumed := 0
 		file := &diskFile{Reader: diskReader(func(p []byte) (int, error) {
 			n, err := reader.Read(p)
 			consumed += n
-			if mode == "read" {
+			if mode == testReadMode {
 				err = sentinel
 			}
 			return n, err
 		})}
-		if mode == "close" {
+		if mode == testCloseMode {
 			file.closeErr = sentinel
 		}
 		source.procFS = diskFS(func(string) (fs.File, error) { return file, nil })

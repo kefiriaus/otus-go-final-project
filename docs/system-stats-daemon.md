@@ -20,11 +20,31 @@ The CLI client streams snapshots and renders CPU usage; output for the other fiv
 Из корня репозитория:
 
 ```sh
-go list ./...
-go build ./...
-go vet ./...
-go test ./...
+make build
+make test
+make vet
+make test-race
 ```
+
+`make build` создаёт `bin/stats-daemon` и `bin/stats-client`; protoc не нужен,
+поскольку generated Protobuf sources уже находятся в репозитории. `make test-race`
+выполняет `go test -race -count=100 ./...`. Чтобы повторные helper-процессы не
+добавляли по секунде на выход, target по умолчанию задаёт
+`GORACE=atexit_sleep_ms=0`; при необходимости переопределите `GORACE`.
+
+`make lint` требует golangci-lint v2.15.0 на `PATH`. Для установки этой версии:
+
+```sh
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+```
+
+`make check` последовательно запускает build, vet, test-race и lint.
+`make docker-build` собирает образ `otus-stats-daemon:local`; переменные
+`DOCKER_IMAGE` и `DOCKER_BUILD_ARGS` позволяют переопределить имя и аргументы build.
+
+GitHub Actions workflow `CI` запускается на push и pull request и содержит четыре
+jobs: `lint`, `test` (vet и 100 race iterations), `build` и `docker`. Локальный
+actionlint проверяет workflow-файл, но не является результатом удалённого pipeline.
 
 Контрактные тесты проверяют сериализацию, сохранение отсутствующих значений
 и измеренных нулей. Streaming behavior is covered by transport tests.
@@ -518,7 +538,7 @@ shutdown before forced Stop. Existing synchronous procfs/statfs calls still depe
 on the operating system returning; context cancellation cannot interrupt a blocked
 kernel syscall. Capture prerequisites and permission limitations remain as described
 in the traffic section. No automatic privilege changes are made. Full six-section
-client output and broader load/deployment work remain subsequent tasks.
+client output and broader load testing remain subsequent tasks.
 
 ## Running the CPU client
 
@@ -542,3 +562,35 @@ printed by this CPU-only client.
 SIGINT/SIGTERM cancels the stream and exits normally. Server EOF also exits 0.
 CLI errors exit 2; connection, stream, formatting, and output failures print a
 diagnostic to stderr and exit 1. Snapshots are written to stdout.
+
+## Running the daemon in Docker
+
+Build and start with defaults:
+
+```sh
+make docker-build
+docker run --rm -p 127.0.0.1:50051:50051 otus-stats-daemon:local
+```
+
+To mount a JSON configuration read-only:
+
+```sh
+docker run --rm \
+  -p 127.0.0.1:50051:50051 \
+  -v "$PWD/configs/stats-daemon.json:/etc/stats-daemon.json:ro" \
+  otus-stats-daemon:local -config /etc/stats-daemon.json
+```
+
+The daemon runs as numeric user/group `10001:10001`. Only `/usr/bin/tcpdump`
+carries the `cap_net_raw=eip` file capability; the daemon itself remains
+unprivileged. Keep `NET_RAW` in Docker's capability bounding set and do not enable
+`no-new-privileges` when traffic capture is required. No additional `--cap-add`
+flag is needed with Docker's default bounding set. For hosts with a restricted
+Docker bridge, `DOCKER_BUILD_ARGS=--network=host make docker-build` can be used
+when host networking is appropriate for the environment.
+
+By default, procfs, sysfs, network interfaces, socket ownership, and filesystem
+mounts describe the container's own namespaces, not a complete view of the host.
+Publishing a port does not change that visibility. For complete host-level
+metrics, build and run `bin/stats-daemon` directly on the host with the documented
+permissions instead of adding broad host mounts or privileges to the container.

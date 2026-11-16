@@ -26,8 +26,10 @@ type TrafficCaptureOptions struct {
 func DefaultTrafficCaptureOptions() TrafficCaptureOptions {
 	return TrafficCaptureOptions{MaxInterfaces: 8, RetryInterval: time.Second}
 }
+
 func selectTrafficInterfaces(all []net.Interface, o TrafficCaptureOptions) ([]string, error) {
-	if o.MaxInterfaces < 1 || o.MaxInterfaces > 8 || o.RetryInterval < time.Second || o.RetryInterval > time.Minute {
+	if o.MaxInterfaces < 1 || o.MaxInterfaces > 8 || o.RetryInterval < time.Second ||
+		o.RetryInterval > time.Minute {
 		return nil, fmt.Errorf("invalid traffic capture limits")
 	}
 	byName := make(map[string]net.Interface)
@@ -37,18 +39,24 @@ func selectTrafficInterfaces(all []net.Interface, o TrafficCaptureOptions) ([]st
 	requested := slices.Clone(o.Interfaces)
 	if len(requested) == 0 {
 		for _, iface := range all {
-			if iface.Flags&net.FlagUp != 0 && (o.IncludeLoopback || iface.Flags&net.FlagLoopback == 0) {
+			if iface.Flags&net.FlagUp != 0 &&
+				(o.IncludeLoopback || iface.Flags&net.FlagLoopback == 0) {
 				requested = append(requested, iface.Name)
 			}
 		}
 	}
 	if len(requested) == 0 || len(requested) > o.MaxInterfaces {
-		return nil, fmt.Errorf("traffic capture requires 1..%d eligible interfaces", o.MaxInterfaces)
+		return nil, fmt.Errorf(
+			"traffic capture requires 1..%d eligible interfaces",
+			o.MaxInterfaces,
+		)
 	}
 	slices.Sort(requested)
 	for i, name := range requested {
 		iface, ok := byName[name]
-		if !ok || iface.Flags&net.FlagUp == 0 || (!o.IncludeLoopback && iface.Flags&net.FlagLoopback != 0) || (i > 0 && requested[i-1] == name) {
+		if !ok || iface.Flags&net.FlagUp == 0 ||
+			(!o.IncludeLoopback && iface.Flags&net.FlagLoopback != 0) ||
+			(i > 0 && requested[i-1] == name) {
 			return nil, fmt.Errorf("invalid, duplicate, down, or excluded interface %q", name)
 		}
 	}
@@ -77,9 +85,28 @@ func NewTrafficCapture(o TrafficCaptureOptions) (*TrafficCapture, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &TrafficCapture{names: names, options: o, interval: time.Second, grace: 500 * time.Millisecond}
+	c := &TrafficCapture{
+		names:    names,
+		options:  o,
+		interval: time.Second,
+		grace:    500 * time.Millisecond,
+	}
 	c.command = func(name string) *exec.Cmd {
-		cmd := exec.Command("tcpdump", "-n", "-p", "-U", "-Q", "inout", "-s", strconv.Itoa(maxTrafficFrameBytes), "-i", name, "-w", "-")
+		// #nosec G204,G702 -- Interface names are validated during construction and no shell is used.
+		cmd := exec.CommandContext(context.Background(),
+			"tcpdump",
+			"-n",
+			"-p",
+			"-U",
+			"-Q",
+			"inout",
+			"-s",
+			strconv.Itoa(maxTrafficFrameBytes),
+			"-i",
+			name,
+			"-w",
+			"-",
+		)
 		cmd.Env = append(os.Environ(), "LC_ALL=C")
 		return cmd
 	}
@@ -102,6 +129,38 @@ func sinkResult(err error) error {
 		return nil
 	}
 	return &trafficSinkError{err}
+}
+
+func (c *TrafficCapture) runSessionWithRetry(
+	group context.Context,
+	cancel context.CancelFunc,
+	sink TrafficSink,
+	name string,
+	failures chan<- error,
+) {
+	for group.Err() == nil {
+		err := c.session(group, sink, name)
+		if group.Err() != nil {
+			return
+		}
+		var fatal *trafficSinkError
+		if errors.As(err, &fatal) {
+			select {
+			case failures <- fatal.error:
+			default:
+			}
+			cancel()
+			return
+		}
+		c.setError(err)
+		retry := time.NewTimer(c.options.RetryInterval)
+		select {
+		case <-retry.C:
+		case <-group.Done():
+			retry.Stop()
+			return
+		}
+	}
 }
 
 // Run retries capture failures internally; they are not terminal RunGroup errors.
@@ -132,29 +191,7 @@ func (c *TrafficCapture) Run(ctx context.Context, sink TrafficSink) error {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for group.Err() == nil {
-				err := c.session(group, sink, name)
-				if group.Err() != nil {
-					return
-				}
-				var fatal *trafficSinkError
-				if errors.As(err, &fatal) {
-					select {
-					case failures <- fatal.error:
-					default:
-					}
-					cancel()
-					return
-				}
-				c.setError(err)
-				retry := time.NewTimer(c.options.RetryInterval)
-				select {
-				case <-retry.C:
-				case <-group.Done():
-					retry.Stop()
-					return
-				}
-			}
+			c.runSessionWithRetry(group, cancel, sink, name, failures)
 		}()
 	}
 	ticker := time.NewTicker(c.interval)

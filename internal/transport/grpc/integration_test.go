@@ -26,7 +26,14 @@ func startBufconn(t *testing.T, service statsv1.StatsServiceServer) statsv1.Stat
 	statsv1.RegisterStatsServiceServer(g, service)
 	done := make(chan struct{})
 	go func() { defer close(done); _ = g.Serve(listener) }()
-	conn, err := grpc.NewClient("passthrough:///test", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(8<<20)))
+	conn, err := grpc.NewClient(
+		"passthrough:///test",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(
+			func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) },
+		),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(8<<20)),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,35 +61,62 @@ type observedService struct {
 	started, finished, returned chan struct{}
 }
 
-func (s observedService) Subscribe(r *statsv1.SubscribeRequest, stream grpc.ServerStreamingServer[statsv1.Snapshot]) error {
+func (s observedService) Subscribe(
+	r *statsv1.SubscribeRequest,
+	stream grpc.ServerStreamingServer[statsv1.Snapshot],
+) error {
 	defer close(s.returned)
-	return s.Server.Subscribe(r, &sendObserved{ServerStreamingServer: stream, started: s.started, finished: s.finished})
+	return s.Server.Subscribe(
+		r,
+		&sendObserved{ServerStreamingServer: stream, started: s.started, finished: s.finished},
+	)
 }
+
 func TestRealGRPCSendUnwindsAfterTimeout(t *testing.T) {
 	clock := newClock()
 	at := clock.Now()
 	command := strings.Repeat("x", 1024)
 	data := metrics.Connections{}
 	for i := 0; i < 512; i++ {
-		socket := metrics.ListeningSocket{Local: metrics.Endpoint{Address: netip.MustParseAddr("127.0.0.1"), HasPort: true, Port: uint16(i)}, Protocol: 6}
+		socket := metrics.ListeningSocket{
+			Local: metrics.Endpoint{
+				Address: netip.MustParseAddr("127.0.0.1"),
+				HasPort: true,
+				Port:    uint16(i),
+			},
+			Protocol: 6,
+		}
 		for j := 0; j < 8; j++ {
 			socket.Owners = append(socket.Owners, metrics.ProcessOwner{Command: &command})
 		}
 		data.ListeningSockets = append(data.ListeningSockets, socket)
 	}
-	s, _ := NewServer(providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
-		v := fixture()
-		v.Window = w
-		v.Connections = daemon.Section[metrics.Connections]{Enabled: true, Summary: aggregate.Summary[metrics.Connections]{Data: &data, CoverageRatio: 1, LastSampleAt: &at}}
-		return v, nil
-	}), Options{SendTimeout: 5 * time.Second})
+	s, _ := NewServer(
+		providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
+			v := fixture()
+			v.Window = w
+			v.Connections = daemon.Section[metrics.Connections]{
+				Enabled: true,
+				Summary: aggregate.Summary[metrics.Connections]{
+					Data:          &data,
+					CoverageRatio: 1,
+					LastSampleAt:  &at,
+				},
+			}
+			return v, nil
+		}),
+		Options{SendTimeout: 5 * time.Second},
+	)
 	s.clock = clock
 	defer s.Close()
 	observed := observedService{s, make(chan struct{}), make(chan struct{}), make(chan struct{})}
 	client := startBufconn(t, observed)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	stream, err := client.Subscribe(ctx, &statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1})
+	stream, err := client.Subscribe(
+		ctx,
+		&statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,15 +147,25 @@ func TestRealGRPCSendUnwindsAfterTimeout(t *testing.T) {
 
 func TestRealGRPCIndependentSubscriptions(t *testing.T) {
 	clock := newClock()
-	s, _ := NewServer(providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
-		v := fixture()
-		v.Window = w
-		at := w.Start
-		v.CPU.Enabled = true
-		v.CPU.Detail = "source unavailable"
-		v.LoadAverage = daemon.Section[metrics.LoadAverage]{Enabled: true, Summary: aggregate.Summary[metrics.LoadAverage]{Data: &metrics.LoadAverage{Load1: 2}, CoverageRatio: 1, LastSampleAt: &at}}
-		return v, nil
-	}), Options{})
+	s, _ := NewServer(
+		providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
+			v := fixture()
+			v.Window = w
+			at := w.Start
+			v.CPU.Enabled = true
+			v.CPU.Detail = "source unavailable"
+			v.LoadAverage = daemon.Section[metrics.LoadAverage]{
+				Enabled: true,
+				Summary: aggregate.Summary[metrics.LoadAverage]{
+					Data:          &metrics.LoadAverage{Load1: 2},
+					CoverageRatio: 1,
+					LastSampleAt:  &at,
+				},
+			}
+			return v, nil
+		}),
+		Options{},
+	)
 	s.clock = clock
 	defer s.Close()
 	client := startBufconn(t, s)
@@ -129,7 +173,10 @@ func TestRealGRPCIndependentSubscriptions(t *testing.T) {
 	defer cancel()
 	aCtx, aCancel := context.WithCancel(ctx)
 	defer aCancel()
-	a, err := client.Subscribe(aCtx, &statsv1.SubscribeRequest{IntervalSeconds: 2, WindowSeconds: 1})
+	a, err := client.Subscribe(
+		aCtx,
+		&statsv1.SubscribeRequest{IntervalSeconds: 2, WindowSeconds: 1},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +191,13 @@ func TestRealGRPCIndependentSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.WindowStart.AsTime().Unix() != 100 || first.WindowEnd.AsTime().Unix() != 101 || first.LoadAverage.Data.Load1 != 2 || first.Cpu.Status.State != statsv1.CollectionState_COLLECTION_STATE_UNAVAILABLE || first.DiskIo.Status.State != statsv1.CollectionState_COLLECTION_STATE_DISABLED || first.Filesystems == nil || first.Traffic == nil || first.Connections == nil {
+	if first.WindowStart.AsTime().Unix() != 100 || first.WindowEnd.AsTime().Unix() != 101 ||
+		first.LoadAverage.Data.Load1 != 2 ||
+		first.Cpu.Status.State != statsv1.CollectionState_COLLECTION_STATE_UNAVAILABLE ||
+		first.DiskIo.Status.State != statsv1.CollectionState_COLLECTION_STATE_DISABLED ||
+		first.Filesystems == nil ||
+		first.Traffic == nil ||
+		first.Connections == nil {
 		t.Fatal(first)
 	}
 	clock.advance(time.Second)

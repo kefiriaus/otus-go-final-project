@@ -8,6 +8,7 @@ import (
 func at(seconds float64) time.Time {
 	return time.Unix(1000, 0).Add(time.Duration(seconds * float64(time.Second))).UTC()
 }
+
 func TestWindow(t *testing.T) {
 	w, err := NewWindow(at(20).In(time.FixedZone("offset", 3600)), 15, 3600)
 	if err != nil || !w.Start.Equal(at(5)) || !w.End.Equal(at(20)) || w.End.Location() != time.UTC {
@@ -19,6 +20,7 @@ func TestWindow(t *testing.T) {
 		}
 	}
 }
+
 func TestSchedule(t *testing.T) {
 	s, err := NewSchedule(at(0), 5, 15, 3600)
 	if err != nil {
@@ -39,7 +41,16 @@ func TestSchedule(t *testing.T) {
 	if _, err := NewSchedule(at(0), 3600, 1, 1); err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range [][3]int{{0, 1, 3600}, {-1, 1, 3600}, {3601, 1, 3600}, {1, 0, 3600}, {1, -1, 3600}, {1, 2, 1}, {1, 1, 0}, {1, 1, 3601}} {
+	for _, v := range [][3]int{
+		{0, 1, 3600},
+		{-1, 1, 3600},
+		{3601, 1, 3600},
+		{1, 0, 3600},
+		{1, -1, 3600},
+		{1, 2, 1},
+		{1, 1, 0},
+		{1, 1, 3601},
+	} {
 		if _, err := NewSchedule(at(0), v[0], v[1], v[2]); err == nil {
 			t.Fatalf("accepted %v", v)
 		}
@@ -53,6 +64,7 @@ func TestWindowRejectsUnsupportedRange(t *testing.T) {
 		}
 	}
 }
+
 func TestScheduleDistantDeadline(t *testing.T) {
 	s, _ := NewSchedule(at(0), 5, 15, 3600)
 	now := s.First.AddDate(500, 0, 0).Add(123 * time.Millisecond)

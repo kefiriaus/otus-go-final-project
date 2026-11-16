@@ -25,7 +25,10 @@ type cpuTestServer struct {
 	block     bool
 }
 
-func (s *cpuTestServer) Subscribe(request *statsv1.SubscribeRequest, stream grpc.ServerStreamingServer[statsv1.Snapshot]) error {
+func (s *cpuTestServer) Subscribe(
+	request *statsv1.SubscribeRequest,
+	stream grpc.ServerStreamingServer[statsv1.Snapshot],
+) error {
 	s.request <- request
 	if s.block {
 		<-stream.Context().Done()
@@ -49,9 +52,14 @@ func newCPUTestClient(t *testing.T, service statsv1.StatsServiceServer) statsv1.
 		defer close(done)
 		_ = server.Serve(listener)
 	}()
-	connection, err := grpc.NewClient("passthrough:///test", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+	dialer := grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 		return listener.DialContext(ctx)
-	}))
+	})
+	connection, err := grpc.NewClient(
+		"passthrough:///test",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		dialer,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +77,10 @@ func TestReceiveSnapshotsRealGRPC(t *testing.T) {
 		cpuFixture(statsv1.CollectionState_COLLECTION_STATE_OK),
 		cpuFixture(statsv1.CollectionState_COLLECTION_STATE_PARTIAL),
 	}
-	service := &cpuTestServer{snapshots: snapshots, request: make(chan *statsv1.SubscribeRequest, 1)}
+	service := &cpuTestServer{
+		snapshots: snapshots,
+		request:   make(chan *statsv1.SubscribeRequest, 1),
+	}
 	client := newCPUTestClient(t, service)
 	options := clientOptions{intervalSeconds: 2, windowSeconds: 30}
 	var output bytes.Buffer
@@ -98,7 +109,11 @@ type countingClient struct {
 	receives *int
 }
 
-func (c countingClient) Subscribe(ctx context.Context, request *statsv1.SubscribeRequest, options ...grpc.CallOption) (grpc.ServerStreamingClient[statsv1.Snapshot], error) {
+func (c countingClient) Subscribe(
+	ctx context.Context,
+	request *statsv1.SubscribeRequest,
+	options ...grpc.CallOption,
+) (grpc.ServerStreamingClient[statsv1.Snapshot], error) {
 	stream, err := c.StatsServiceClient.Subscribe(ctx, request, options...)
 	if err != nil {
 		return nil, err
@@ -125,20 +140,31 @@ func (w failingWriter) Write([]byte) (int, error) {
 }
 
 func TestReceiveSnapshotsServerError(t *testing.T) {
-	service := &cpuTestServer{request: make(chan *statsv1.SubscribeRequest, 1), err: status.Error(codes.InvalidArgument, "invalid window")}
+	service := &cpuTestServer{
+		request: make(chan *statsv1.SubscribeRequest, 1),
+		err:     status.Error(codes.InvalidArgument, "invalid window"),
+	}
 	client := newCPUTestClient(t, service)
-	err := receiveSnapshots(context.Background(), client, clientOptions{intervalSeconds: 1, windowSeconds: 3601}, &bytes.Buffer{})
+	options := clientOptions{intervalSeconds: 1, windowSeconds: 3601}
+	err := receiveSnapshots(context.Background(), client, options, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "invalid window") {
 		t.Fatalf("error=%v", err)
 	}
 }
 
 func TestReceiveSnapshotsWriterError(t *testing.T) {
-	service := &cpuTestServer{snapshots: []*statsv1.Snapshot{cpuFixture(statsv1.CollectionState_COLLECTION_STATE_OK), cpuFixture(statsv1.CollectionState_COLLECTION_STATE_OK)}, request: make(chan *statsv1.SubscribeRequest, 1)}
+	service := &cpuTestServer{
+		snapshots: []*statsv1.Snapshot{
+			cpuFixture(statsv1.CollectionState_COLLECTION_STATE_OK),
+			cpuFixture(statsv1.CollectionState_COLLECTION_STATE_OK),
+		},
+		request: make(chan *statsv1.SubscribeRequest, 1),
+	}
 	receives := 0
 	client := countingClient{StatsServiceClient: newCPUTestClient(t, service), receives: &receives}
 	writeErr := errors.New("output failed")
-	err := receiveSnapshots(context.Background(), client, clientOptions{intervalSeconds: 1, windowSeconds: 15}, failingWriter{err: writeErr})
+	options := clientOptions{intervalSeconds: 1, windowSeconds: 15}
+	err := receiveSnapshots(context.Background(), client, options, failingWriter{err: writeErr})
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("error=%v, want %v", err, writeErr)
 	}

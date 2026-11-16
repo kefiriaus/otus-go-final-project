@@ -12,6 +12,7 @@ func closeTo(t *testing.T, got, want float64) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
+
 func TestWeightedMean(t *testing.T) {
 	values := []Interval[float64]{interval(0, 1, 10.0), interval(1, 3, 20.0)}
 	got, err := WeightedMean(Window{at(0), at(4)}, values)
@@ -46,9 +47,16 @@ func TestWeightedMean(t *testing.T) {
 		t.Fatal("mutated input")
 	}
 }
+
 func TestWeightedMeanValidation(t *testing.T) {
 	w := Window{at(0), at(4)}
-	for _, v := range [][]Interval[float64]{{interval(0, 1, math.NaN())}, {interval(0, 1, math.Inf(1))}, {interval(0, 2, 1.0), interval(1, 3, 2.0)}, {interval(1, 2, 1.0), interval(0, 1, 2.0)}, {interval(2, 1, 1.0)}} {
+	for _, v := range [][]Interval[float64]{
+		{interval(0, 1, math.NaN())},
+		{interval(0, 1, math.Inf(1))},
+		{interval(0, 2, 1.0), interval(1, 3, 2.0)},
+		{interval(1, 2, 1.0), interval(0, 1, 2.0)},
+		{interval(2, 1, 1.0)},
+	} {
 		if _, err := WeightedMean(w, v); err == nil {
 			t.Fatalf("accepted %+v", v)
 		}
@@ -57,6 +65,7 @@ func TestWeightedMeanValidation(t *testing.T) {
 		t.Fatal("invalid window")
 	}
 }
+
 func TestMeanRates(t *testing.T) {
 	first := interval(0, 1, []float64{10, 0})
 	second := interval(1, 3, []float64{20, 30})
@@ -71,7 +80,12 @@ func TestMeanRates(t *testing.T) {
 	if first.Value[0] != 10 {
 		t.Fatal("aliased input")
 	}
-	for _, v := range [][]Interval[[]float64]{{interval(0, 1, []float64{})}, {interval(0, 1, []float64{-1})}, {interval(0, 1, []float64{math.Inf(1)})}, {first, interval(1, 2, []float64{1})}} {
+	for _, v := range [][]Interval[[]float64]{
+		{interval(0, 1, []float64{})},
+		{interval(0, 1, []float64{-1})},
+		{interval(0, 1, []float64{math.Inf(1)})},
+		{first, interval(1, 2, []float64{1})},
+	} {
 		if _, err := MeanRates(Window{at(0), at(3)}, v); err == nil {
 			t.Fatal("invalid rates")
 		}
@@ -81,6 +95,7 @@ func TestMeanRates(t *testing.T) {
 		t.Fatalf("%+v %v", empty, err)
 	}
 }
+
 func TestLatest(t *testing.T) {
 	first := interval(0, 1, "old")
 	second := interval(1, 2, "new")
@@ -88,7 +103,8 @@ func TestLatest(t *testing.T) {
 	excluded.ObservedAt = at(3)
 	values := []Interval[string]{first, second, excluded}
 	got, err := Latest(Window{at(.5), at(3)}, values)
-	if err != nil || got.Data == nil || *got.Data != "new" || !got.LastSampleAt.Equal(at(1)) || got.CoverageRatio != 1 {
+	if err != nil || got.Data == nil || *got.Data != "new" || !got.LastSampleAt.Equal(at(1)) ||
+		got.CoverageRatio != 1 {
 		t.Fatalf("%+v %v", got, err)
 	}
 	empty, err := Latest(Window{at(2), at(3)}, []Interval[string]{excluded})

@@ -27,8 +27,12 @@ func TestParseLoadAverage(t *testing.T) {
 		})
 	}
 }
+
 func TestParseLoadAverageInvalid(t *testing.T) {
-	for _, input := range []string{"", " ", "1", "1 2", "x 2 3", "1 x 3", "1 2 x", "-1 2 3", "1 -2 3", "1 2 -3", "NaN 2 3", "1 +Inf 3", "1 2 -Inf", "1e999 2 3"} {
+	for _, input := range []string{
+		"", " ", "1", "1 2", "x 2 3", "1 x 3", "1 2 x",
+		"-1 2 3", "1 -2 3", "1 2 -3", "NaN 2 3", "1 +Inf 3", "1 2 -Inf", "1e999 2 3",
+	} {
 		t.Run(input, func(t *testing.T) {
 			got, err := parseLoadAverage([]byte(input))
 			if err == nil {

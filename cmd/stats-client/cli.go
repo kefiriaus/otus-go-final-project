@@ -22,8 +22,16 @@ func parseArgs(args []string, output io.Writer) (clientOptions, error) {
 	flags := flag.NewFlagSet("stats-client", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	address := flags.String("address", options.address, "daemon address (host:port)")
-	interval := flags.Int("interval", int(options.intervalSeconds), "subscription interval in seconds (1..3600)")
-	window := flags.Int("window", int(options.windowSeconds), "aggregation window in seconds (1..3600)")
+	interval := flags.Int(
+		"interval",
+		int(options.intervalSeconds),
+		"subscription interval in seconds (1..3600)",
+	)
+	window := flags.Int(
+		"window",
+		int(options.windowSeconds),
+		"aggregation window in seconds (1..3600)",
+	)
 	var usage bytes.Buffer
 	flags.Usage = func() {
 		fmt.Fprintln(&usage, "Usage: stats-client [-address HOST:PORT] [-interval N] [-window M]")
@@ -55,7 +63,12 @@ func parseArgs(args []string, output io.Writer) (clientOptions, error) {
 	return options, nil
 }
 
-func runContext(ctx context.Context, args []string, stdout, stderr io.Writer, receive receiveFunc) int {
+func runContext(
+	ctx context.Context,
+	args []string,
+	stdout, stderr io.Writer,
+	receive receiveFunc,
+) int {
 	options, err := parseArgs(args, stdout)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0

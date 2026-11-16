@@ -29,11 +29,16 @@ func TestRunGroupConcurrent(t *testing.T) {
 		t.Fatal("did not await workers")
 	}
 }
+
 func TestRunGroupWorkerFailure(t *testing.T) {
 	sentinel := errors.New("terminal")
 	ready := make(chan struct{})
 	cleaned := false
-	err := RunGroup(context.Background(), func(c context.Context) error { close(ready); <-c.Done(); cleaned = true; return c.Err() }, func(context.Context) error { <-ready; return sentinel })
+	err := RunGroup(
+		context.Background(),
+		func(c context.Context) error { close(ready); <-c.Done(); cleaned = true; return c.Err() },
+		func(context.Context) error { <-ready; return sentinel },
+	)
 	if !errors.Is(err, sentinel) || !cleaned {
 		t.Fatalf("result: %v, cleanup %v", err, cleaned)
 	}
@@ -41,6 +46,7 @@ func TestRunGroupWorkerFailure(t *testing.T) {
 		t.Fatal("unexpected return accepted")
 	}
 }
+
 func TestRunGroupEmpty(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -55,11 +61,17 @@ func TestRunGroupEmpty(t *testing.T) {
 		t.Fatal("cancellation")
 	}
 }
+
 func TestRunGroupNilWorker(t *testing.T) {
-	if RunGroup(context.Background(), func(context.Context) error { t.Error("started"); return nil }, nil) == nil {
+	if RunGroup(
+		context.Background(),
+		func(context.Context) error { t.Error("started"); return nil },
+		nil,
+	) == nil {
 		t.Fatal("accepted nil")
 	}
 }
+
 func TestRunGroupPeriodicIsolation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -69,7 +81,11 @@ func TestRunGroupPeriodicIsolation(t *testing.T) {
 	options := Options{5 * time.Millisecond, time.Millisecond}
 	go func() {
 		done <- RunGroup(ctx, func(c context.Context) error {
-			return RunPeriodic(c, sourceFunc(func(c context.Context) (int, error) { <-c.Done(); return 0, c.Err() }), options, bad)
+			source := sourceFunc(func(c context.Context) (int, error) {
+				<-c.Done()
+				return 0, c.Err()
+			})
+			return RunPeriodic(c, source, options, bad)
 		}, func(c context.Context) error {
 			return RunPeriodic(c, sourceFunc(func(context.Context) (int, error) { return 7, nil }), options, good)
 		})

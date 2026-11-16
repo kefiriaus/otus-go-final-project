@@ -32,7 +32,12 @@ func DefaultOptions() Options { return Options{Interval: time.Second, Timeout: 9
 
 // RunPeriodic collects immediately and on a fixed schedule, skipping busy ticks.
 // It never closes output. Delivery can block this runner until ctx is canceled.
-func RunPeriodic[T any](ctx context.Context, source Source[T], options Options, output chan<- Sample[T]) error {
+func RunPeriodic[T any](
+	ctx context.Context,
+	source Source[T],
+	options Options,
+	output chan<- Sample[T],
+) error {
 	if options.Interval <= 0 || options.Timeout <= 0 {
 		return fmt.Errorf("collection interval and timeout must be positive")
 	}

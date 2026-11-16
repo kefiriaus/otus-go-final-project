@@ -9,13 +9,26 @@ import (
 func TestSharedHistoryClientWindows(t *testing.T) {
 	gauge, _ := NewGaugeSeries[float64](4)
 	counter, _ := NewCounterSeries(4)
-	gaugeEvents := []Event[float64]{{At: at(0), Value: 10}, {At: at(1), Value: 20}, {At: at(2), Err: errors.New("unavailable")}, {At: at(3), Value: 40}, {At: at(4), Value: 50}}
+	gaugeEvents := []Event[float64]{
+		{At: at(0), Value: 10},
+		{At: at(1), Value: 20},
+		{At: at(2), Err: errors.New("unavailable")},
+		{At: at(3), Value: 40},
+		{At: at(4), Value: 50},
+	}
 	for _, event := range gaugeEvents {
 		if err := gauge.Add(event); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, event := range []Event[CounterPoint]{{At: at(0), Value: CounterPoint{Values: []uint64{100}}}, {At: at(1), Value: CounterPoint{Values: []uint64{160}}}, {At: at(2), Err: errors.New("unavailable")}, {At: at(3), Value: CounterPoint{Values: []uint64{300}}}, {At: at(4), Value: CounterPoint{Values: []uint64{330}}}} {
+	counterEvents := []Event[CounterPoint]{
+		{At: at(0), Value: CounterPoint{Values: []uint64{100}}},
+		{At: at(1), Value: CounterPoint{Values: []uint64{160}}},
+		{At: at(2), Err: errors.New("unavailable")},
+		{At: at(3), Value: CounterPoint{Values: []uint64{300}}},
+		{At: at(4), Value: CounterPoint{Values: []uint64{330}}},
+	}
+	for _, event := range counterEvents {
 		if err := counter.Add(event); err != nil {
 			t.Fatal(err)
 		}

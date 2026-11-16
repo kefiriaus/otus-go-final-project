@@ -11,13 +11,24 @@ import (
 	"time"
 )
 
+const (
+	testCommName            = "comm"
+	testOwnerMode           = "owner"
+	testDisappearMode       = "disappear"
+	testStatusName          = "status"
+	testOversizedCommMode   = "oversized comm"
+	testOversizedStatusMode = "oversized status"
+)
+
 func ownerFixture() fstest.MapFS {
 	result := fstest.MapFS{}
 	for _, pid := range []int{42, 43} {
 		base := fmt.Sprint(pid)
 		result[base+"/fd/3"] = &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("socket:[123]")}
 		result[base+"/comm"] = &fstest.MapFile{Data: []byte(" worker \n")}
-		result[base+"/status"] = &fstest.MapFile{Data: []byte(fmt.Sprintf("Uid:\t9999 %d 9999 9999\n", pid))}
+		result[base+"/status"] = &fstest.MapFile{
+			Data: []byte(fmt.Sprintf("Uid:\t9999 %d 9999 9999\n", pid)),
+		}
 	}
 	result["42/fd/4"] = &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("socket:[123]")}
 	result["42/fd/5"] = &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("pipe:[456]")}
@@ -36,6 +47,7 @@ func (f ownerTestFS) Open(name string) (fs.File, error) {
 	}
 	return f.FS.Open(name)
 }
+
 func (f ownerTestFS) ReadLink(name string) (string, error) {
 	if f.link != nil {
 		return f.link(name)
@@ -55,69 +67,92 @@ func TestConnectionOwners(t *testing.T) {
 	}
 	for i, owner := range owners[123] {
 		want := uint32(42 + i)
-		if owner.PID == nil || *owner.PID != want || owner.Command == nil || *owner.Command != " worker " || owner.User == nil || *owner.User != fmt.Sprint(want) {
+		if owner.PID == nil || *owner.PID != want || owner.Command == nil ||
+			*owner.Command != " worker " ||
+			owner.User == nil ||
+			*owner.User != fmt.Sprint(want) {
 			t.Fatalf("%+v", owner)
 		}
 	}
-	source.procFS = ownerTestFS{FS: ownerFixture(), open: func(string) (fs.File, error) { t.Fatal("scanned without targets"); return nil, nil }}
+	source.procFS = ownerTestFS{
+		FS:   ownerFixture(),
+		open: func(string) (fs.File, error) { t.Fatal("scanned without targets"); return nil, nil },
+	}
 	empty, issues := source.lookupOwners(context.Background(), nil)
 	if len(empty) != 0 || issues.partial {
 		t.Fatalf("%v %+v", empty, issues)
 	}
 }
+
+func configureOwnerPartial(
+	source *ConnectionsSource,
+	fixture fstest.MapFS,
+	mode string,
+	sentinel error,
+) uint64 {
+	source.procFS = fixture
+	switch mode {
+	case "root":
+		source.procFS = ownerTestFS{
+			FS: fixture, open: func(string) (fs.File, error) { return nil, sentinel },
+		}
+	case "fd":
+		source.procFS = ownerTestFS{FS: fixture, open: func(name string) (fs.File, error) {
+			if strings.HasSuffix(name, "/fd") {
+				return nil, sentinel
+			}
+			return fixture.Open(name)
+		}}
+	case testLinkMode:
+		source.procFS = ownerTestFS{
+			FS: fixture, link: func(string) (string, error) { return "", sentinel },
+		}
+	case testDisappearMode:
+		source.procFS = ownerTestFS{
+			FS: fixture, link: func(string) (string, error) { return "", fs.ErrNotExist },
+		}
+	case testCommName:
+		delete(fixture, "42/comm")
+	case testStatusName:
+		fixture["42/status"].Data = []byte("bad status")
+	case "badlink":
+		fixture["42/fd/3"].Data = []byte("socket:[bad]")
+	case "oversized link":
+		fixture["42/fd/3"].Data = []byte(strings.Repeat("x", 4097))
+	case testOversizedCommMode:
+		fixture["42/comm"].Data = []byte(strings.Repeat("x", 257))
+	case testOversizedStatusMode:
+		fixture["42/status"].Data = []byte(strings.Repeat("x", 65537))
+	case "unmatched":
+		return 999
+	case "no readlink":
+		source.procFS = struct{ fs.FS }{fixture}
+	}
+	return 123
+}
+
 func TestConnectionOwnersPartial(t *testing.T) {
 	sentinel := errors.New("permission denied")
-	for _, mode := range []string{"root", "fd", "link", "disappear", "comm", "status", "badlink", "oversized link", "oversized comm", "oversized status", "unmatched", "no readlink"} {
+	for _, mode := range []string{
+		"root", "fd", testLinkMode, testDisappearMode, testCommName, testStatusName,
+		"badlink", "oversized link", testOversizedCommMode, testOversizedStatusMode,
+		"unmatched", "no readlink",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := ownerFixture()
 			source, _ := NewConnectionsSource(DefaultConnectionsOptions())
-			target := uint64(123)
-			switch mode {
-			case "root":
-				source.procFS = ownerTestFS{FS: fixture, open: func(string) (fs.File, error) { return nil, sentinel }}
-			case "fd":
-				source.procFS = ownerTestFS{FS: fixture, open: func(name string) (fs.File, error) {
-					if strings.HasSuffix(name, "/fd") {
-						return nil, sentinel
-					}
-					return fixture.Open(name)
-				}}
-			case "link":
-				source.procFS = ownerTestFS{FS: fixture, link: func(string) (string, error) { return "", sentinel }}
-			case "disappear":
-				source.procFS = ownerTestFS{FS: fixture, link: func(string) (string, error) { return "", fs.ErrNotExist }}
-			case "comm":
-				delete(fixture, "42/comm")
-			case "status":
-				fixture["42/status"].Data = []byte("bad status")
-			case "badlink":
-				fixture["42/fd/3"].Data = []byte("socket:[bad]")
-			case "oversized link":
-				fixture["42/fd/3"].Data = []byte(strings.Repeat("x", 4097))
-			case "oversized comm":
-				fixture["42/comm"].Data = []byte(strings.Repeat("x", 257))
-			case "oversized status":
-				fixture["42/status"].Data = []byte(strings.Repeat("x", 65537))
-			case "unmatched":
-				target = 999
-			case "no readlink":
-				source.procFS = struct{ fs.FS }{fixture}
-			}
-			if source.procFS == nil {
-				source.procFS = fixture
-			} else if mode != "root" && mode != "fd" && mode != "link" && mode != "disappear" && mode != "no readlink" {
-				source.procFS = fixture
-			}
+			target := configureOwnerPartial(source, fixture, mode, sentinel)
 			owners, issues := source.lookupOwners(context.Background(), []uint64{target})
 			if !issues.partial || issues.detail == "" || len(issues.detail) > 4096 {
 				t.Fatalf("%+v %+v", owners, issues)
 			}
-			if mode == "comm" || mode == "oversized comm" {
-				if len(owners[123]) != 2 || owners[123][0].PID == nil || owners[123][0].Command != nil {
+			if mode == testCommName || mode == testOversizedCommMode {
+				if len(owners[123]) != 2 || owners[123][0].PID == nil ||
+					owners[123][0].Command != nil {
 					t.Fatal("lost PID or fabricated command")
 				}
 			}
-			if mode == "status" || mode == "oversized status" {
+			if mode == testStatusName || mode == testOversizedStatusMode {
 				if len(owners[123]) != 2 || owners[123][0].User != nil {
 					t.Fatal("fabricated user")
 				}
@@ -125,8 +160,9 @@ func TestConnectionOwnersPartial(t *testing.T) {
 		})
 	}
 }
+
 func TestConnectionOwnerLimits(t *testing.T) {
-	for _, mode := range []string{"process", "FD", "per process FD", "owner", "budget", "reserve"} {
+	for _, mode := range []string{"process", "FD", "per process FD", testOwnerMode, "budget", "reserve"} {
 		t.Run(mode, func(t *testing.T) {
 			o := DefaultConnectionsOptions()
 			switch mode {
@@ -136,7 +172,7 @@ func TestConnectionOwnerLimits(t *testing.T) {
 				o.MaxFDs = 1
 			case "per process FD":
 				o.MaxFDsPerProcess = 1
-			case "owner":
+			case testOwnerMode:
 				o.MaxOwnersPerSocket = 1
 			case "budget":
 				o.OwnerTimeout = time.Nanosecond
@@ -156,7 +192,7 @@ func TestConnectionOwnerLimits(t *testing.T) {
 			if !issues.partial {
 				t.Fatalf("%s: %+v %+v", mode, owners, issues)
 			}
-			if mode == "owner" && len(owners[123]) != 1 {
+			if mode == testOwnerMode && len(owners[123]) != 1 {
 				t.Fatal(owners)
 			}
 		})

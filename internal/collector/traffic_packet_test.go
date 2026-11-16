@@ -17,6 +17,7 @@ func ipv4Packet(protocol byte, srcPort, dstPort uint16) []byte {
 	binary.BigEndian.PutUint16(b[22:], dstPort)
 	return b
 }
+
 func ipv6Packet(protocol byte) []byte {
 	b := make([]byte, 48)
 	b[0] = 0x60
@@ -30,25 +31,41 @@ func ipv6Packet(protocol byte) []byte {
 	binary.BigEndian.PutUint16(b[42:], 456)
 	return b
 }
+
 func trafficFrame(link uint32, data []byte) pcapFrame {
-	return pcapFrame{At: time.Unix(1000, 0).UTC(), LinkType: link, OriginalLength: uint32(len(data)), Data: data}
+	return pcapFrame{
+		At:             time.Unix(1000, 0).UTC(),
+		LinkType:       link,
+		OriginalLength: testUint32(len(data)),
+		Data:           data,
+	}
 }
-func TestTrafficPacket(t *testing.T) {
+
+func testTrafficIPProtocols(t *testing.T) {
+	t.Helper()
 	for _, protocol := range []byte{6, 17, 1, 99} {
 		packet, ok, err := decodeTrafficFrame(trafficFrame(101, ipv4Packet(protocol, 0, 53)), "eth0")
-		if err != nil || !ok || packet.IPBytes != 28 || packet.Flow.Protocol != protocol || !packet.FlowKnown || packet.Flow.Source.Address.String() != "192.0.2.1" {
+		if err != nil || !ok || packet.IPBytes != 28 || packet.Flow.Protocol != protocol ||
+			!packet.FlowKnown || packet.Flow.Source.Address.String() != "192.0.2.1" {
 			t.Fatalf("%+v %v", packet, err)
 		}
-		if packet.Flow.Source.HasPort != (protocol == 6 || protocol == 17) || packet.Flow.Source.Port != 0 {
+		if packet.Flow.Source.HasPort != (protocol == 6 || protocol == 17) ||
+			packet.Flow.Source.Port != 0 {
 			t.Fatal(packet)
 		}
 	}
 	for _, protocol := range []byte{6, 17, 58, 50, 253} {
 		packet, ok, err := decodeTrafficFrame(trafficFrame(101, ipv6Packet(protocol)), "eth0")
-		if err != nil || !ok || packet.IPBytes != 48 || packet.Flow.Protocol != protocol || packet.Flow.Destination.Address.String() != "2001:db8::2" || packet.Flow.Source.HasPort != (protocol == 6 || protocol == 17) {
+		if err != nil || !ok || packet.IPBytes != 48 || packet.Flow.Protocol != protocol ||
+			packet.Flow.Destination.Address.String() != "2001:db8::2" ||
+			packet.Flow.Source.HasPort != (protocol == 6 || protocol == 17) {
 			t.Fatalf("%+v %v", packet, err)
 		}
 	}
+}
+
+func testTrafficLinkTypes(t *testing.T) {
+	t.Helper()
 	for _, link := range []uint32{1, 113, 276, 228, 229} {
 		ip := ipv4Packet(17, 1, 2)
 		proto := uint16(0x800)
@@ -56,31 +73,35 @@ func TestTrafficPacket(t *testing.T) {
 			ip = ipv6Packet(17)
 			proto = 0x86dd
 		}
-		var h []byte
+		h := make([]byte, 0, 20)
 		switch link {
 		case 1:
-			h = make([]byte, 14)
+			h = h[:14]
 			binary.BigEndian.PutUint16(h[12:], proto)
 		case 113:
-			h = make([]byte, 16)
+			h = h[:16]
 			binary.BigEndian.PutUint16(h[14:], proto)
 		case 276:
-			h = make([]byte, 20)
+			h = h[:20]
 			binary.BigEndian.PutUint16(h, proto)
 		}
-		frame := trafficFrame(link, append(h, ip...))
-		packet, ok, err := decodeTrafficFrame(frame, "eth0")
+		h = append(h, ip...)
+		packet, ok, err := decodeTrafficFrame(trafficFrame(link, h), "eth0")
 		if err != nil || !ok || packet.IPBytes != uint64(len(ip)) {
 			t.Fatalf("link %d: %+v %v", link, packet, err)
 		}
 	}
-	// Two VLAN tags and padding must not inflate IP bytes.
-	eth := make([]byte, 22)
+}
+
+func testTrafficVLANAndNonIP(t *testing.T) {
+	t.Helper()
+	eth := make([]byte, 22, 70)
 	binary.BigEndian.PutUint16(eth[12:], 0x88a8)
 	binary.BigEndian.PutUint16(eth[16:], 0x8100)
 	binary.BigEndian.PutUint16(eth[20:], 0x800)
-	data := append(append(eth, ipv4Packet(17, 1, 2)...), make([]byte, 20)...)
-	packet, ok, err := decodeTrafficFrame(trafficFrame(1, data), "eth0")
+	eth = append(eth, ipv4Packet(17, 1, 2)...)
+	eth = append(eth, make([]byte, 20)...)
+	packet, ok, err := decodeTrafficFrame(trafficFrame(1, eth), "eth0")
 	if err != nil || !ok || packet.IPBytes != 28 {
 		t.Fatalf("%+v %v", packet, err)
 	}
@@ -90,6 +111,13 @@ func TestTrafficPacket(t *testing.T) {
 		t.Fatal("ARP counted")
 	}
 }
+
+func TestTrafficPacket(t *testing.T) {
+	testTrafficIPProtocols(t)
+	testTrafficLinkTypes(t)
+	testTrafficVLANAndNonIP(t)
+}
+
 func TestTrafficPacketFragmentsAndTruncation(t *testing.T) {
 	for _, bits := range []uint16{0x2000, 1} {
 		data := ipv4Packet(6, 1, 2)
@@ -114,7 +142,8 @@ func TestTrafficPacketFragmentsAndTruncation(t *testing.T) {
 	binary.BigEndian.PutUint16(data[48:], 0)
 	binary.BigEndian.PutUint16(data[50:], 53)
 	packet, _, err = decodeTrafficFrame(trafficFrame(101, data), "eth0")
-	if err != nil || packet.Flow.Protocol != 17 || !packet.Flow.Source.HasPort || packet.Flow.Source.Port != 0 {
+	if err != nil || packet.Flow.Protocol != 17 || !packet.Flow.Source.HasPort ||
+		packet.Flow.Source.Port != 0 {
 		t.Fatalf("%+v %v", packet, err)
 	}
 	data[6] = 44
@@ -125,13 +154,16 @@ func TestTrafficPacketFragmentsAndTruncation(t *testing.T) {
 		t.Fatalf("%+v %v", packet, err)
 	}
 }
+
 func TestTrafficPacketInvalid(t *testing.T) {
-	for _, mode := range []string{"short", "version", "ihl", "total", "wire", "extension", "jumbo", "link"} {
+	for _, mode := range []string{
+		testShortMode, testVersionMode, "ihl", "total", "wire", "extension", "jumbo", testLinkMode,
+	} {
 		frame := trafficFrame(101, ipv4Packet(17, 1, 2))
 		switch mode {
-		case "short":
+		case testShortMode:
 			frame.Data = frame.Data[:10]
-		case "version":
+		case testVersionMode:
 			frame.Data[0] = 0x75
 		case "ihl":
 			frame.Data[0] = 0x44
@@ -145,7 +177,7 @@ func TestTrafficPacketInvalid(t *testing.T) {
 		case "jumbo":
 			frame = trafficFrame(101, ipv6Packet(0))
 			binary.BigEndian.PutUint16(frame.Data[4:], 0)
-		case "link":
+		case testLinkMode:
 			frame.LinkType = 999
 		}
 		if _, _, err := decodeTrafficFrame(frame, "eth0"); err == nil {
@@ -153,10 +185,11 @@ func TestTrafficPacketInvalid(t *testing.T) {
 		}
 	}
 }
+
 func FuzzTrafficPacket(f *testing.F) {
 	f.Add(ipv4Packet(17, 1, 2))
 	f.Add(ipv6Packet(6))
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzz(func(_ *testing.T, data []byte) {
 		if len(data) > maxTrafficFrameBytes {
 			return
 		}
@@ -189,7 +222,8 @@ func TestTrafficPacketAHLength(t *testing.T) {
 		binary.BigEndian.PutUint16(data[40+size:], 123)
 		binary.BigEndian.PutUint16(data[42+size:], 456)
 		packet, ok, err := decodeTrafficFrame(trafficFrame(101, data), "eth0")
-		if err != nil || !ok || packet.Flow.Protocol != 17 || packet.Flow.Source.Port != 123 || packet.Flow.Destination.Port != 456 {
+		if err != nil || !ok || packet.Flow.Protocol != 17 || packet.Flow.Source.Port != 123 ||
+			packet.Flow.Destination.Port != 456 {
 			t.Fatalf("extension %d: %+v %v", extension, packet, err)
 		}
 	}

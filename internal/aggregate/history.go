@@ -21,13 +21,19 @@ func (v Interval[T]) validate() error {
 	}
 	return nil
 }
+
 func (v Interval[T]) utc() Interval[T] {
 	v.Start = v.Start.UTC()
 	v.End = v.End.UTC()
 	v.ObservedAt = v.ObservedAt.UTC()
 	return v
 }
-func (v Interval[T]) intersects(w Window) bool { return v.Start.Before(w.End) && v.End.After(w.Start) }
+
+func (v Interval[T]) intersects(
+	w Window,
+) bool {
+	return v.Start.Before(w.End) && v.End.After(w.Start)
+}
 
 // History is a bounded, concurrent ring of ordered, nonoverlapping intervals.
 // Values and nested storage must remain immutable after Append and Read.
@@ -45,8 +51,12 @@ func NewHistory[T any](maxWindowSeconds, maxEntries int) (*History[T], error) {
 	if maxWindowSeconds < 1 || maxWindowSeconds > 3600 || maxEntries <= 0 {
 		return nil, fmt.Errorf("history requires window limit 1..3600 and positive capacity")
 	}
-	return &History[T]{entries: make([]Interval[T], maxEntries), retention: time.Duration(maxWindowSeconds+2) * time.Second}, nil
+	return &History[T]{
+		entries:   make([]Interval[T], maxEntries),
+		retention: time.Duration(maxWindowSeconds+2) * time.Second,
+	}, nil
 }
+
 func (h *History[T]) drop() {
 	var zero Interval[T]
 	h.entries[h.head] = zero

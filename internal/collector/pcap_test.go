@@ -9,6 +9,20 @@ import (
 	"time"
 )
 
+const (
+	testLinkMode    = "link"
+	testShortMode   = "short"
+	testVersionMode = "version"
+)
+
+func testUint32(value int) uint32 {
+	if value < 0 || uint64(value) > uint64(^uint32(0)) {
+		panic("test value exceeds uint32")
+	}
+	// #nosec G115 -- The range is checked immediately above.
+	return uint32(value)
+}
+
 func pcapHeader(order binary.ByteOrder, nano bool, link, snap uint32) []byte {
 	b := make([]byte, 24)
 	magic := uint32(0xa1b2c3d4)
@@ -22,22 +36,26 @@ func pcapHeader(order binary.ByteOrder, nano bool, link, snap uint32) []byte {
 	order.PutUint32(b[20:], link)
 	return b
 }
+
 func pcapRecord(order binary.ByteOrder, sec, fraction, original uint32, data []byte) []byte {
-	b := make([]byte, 16)
+	b := make([]byte, 16, 16+len(data))
 	order.PutUint32(b, sec)
 	order.PutUint32(b[4:], fraction)
-	order.PutUint32(b[8:], uint32(len(data)))
+	// #nosec G115 -- Test packets are far below the uint32 size limit.
+	order.PutUint32(b[8:], testUint32(len(data)))
 	order.PutUint32(b[12:], original)
-	return append(b, data...)
+	b = append(b, data...)
+	return b
 }
+
 func TestPCAP(t *testing.T) {
 	for _, order := range []binary.ByteOrder{binary.LittleEndian, binary.BigEndian} {
 		for _, nano := range []bool{false, true} {
 			header := pcapHeader(order, nano, 101, 1024)
 			order.PutUint32(header[8:], 123)
 			order.PutUint32(header[12:], 456)
-			stream := append(header, pcapRecord(order, 1000, 123, 4, []byte{1, 2, 3, 4})...)
-			reader, err := newPCAPReader(bytes.NewReader(stream), 1024)
+			header = append(header, pcapRecord(order, 1000, 123, 4, []byte{1, 2, 3, 4})...)
+			reader, err := newPCAPReader(bytes.NewReader(header), 1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -46,7 +64,9 @@ func TestPCAP(t *testing.T) {
 			if nano {
 				want = 123
 			}
-			if err != nil || frame.LinkType != 101 || frame.OriginalLength != 4 || !bytes.Equal(frame.Data, []byte{1, 2, 3, 4}) || !frame.At.Equal(time.Unix(1000, want).UTC()) {
+			if err != nil || frame.LinkType != 101 || frame.OriginalLength != 4 ||
+				!bytes.Equal(frame.Data, []byte{1, 2, 3, 4}) ||
+				!frame.At.Equal(time.Unix(1000, want).UTC()) {
 				t.Fatalf("%+v %v", frame, err)
 			}
 			if _, err := reader.Next(); !errors.Is(err, io.EOF) {
@@ -55,23 +75,24 @@ func TestPCAP(t *testing.T) {
 		}
 	}
 }
+
 func TestPCAPInvalid(t *testing.T) {
-	for _, mode := range []string{"magic", "version", "snap", "link", "flags", "fcs", "short"} {
+	for _, mode := range []string{"magic", testVersionMode, "snap", testLinkMode, "flags", "fcs", testShortMode} {
 		header := pcapHeader(binary.LittleEndian, false, 101, 1024)
 		switch mode {
 		case "magic":
 			header[0] = 0
-		case "version":
+		case testVersionMode:
 			header[4] = 3
 		case "snap":
 			binary.LittleEndian.PutUint32(header[16:], 1025)
-		case "link":
+		case testLinkMode:
 			binary.LittleEndian.PutUint32(header[20:], 999)
 		case "flags":
 			binary.LittleEndian.PutUint32(header[20:], 0x10000|101)
 		case "fcs":
 			binary.LittleEndian.PutUint32(header[20:], 0x10000000|101)
-		case "short":
+		case testShortMode:
 			header = header[:23]
 		}
 		if _, err := newPCAPReader(bytes.NewReader(header), 1024); err == nil {
@@ -97,7 +118,7 @@ func TestPCAPInvalid(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := reader.Next(); err == nil || err == io.EOF {
+		if _, err := reader.Next(); err == nil || errors.Is(err, io.EOF) {
 			t.Fatalf("accepted %s: %v", mode, err)
 		}
 	}
@@ -106,10 +127,11 @@ func TestPCAPInvalid(t *testing.T) {
 		t.Fatalf("valid FCS flags: %v", err)
 	}
 }
+
 func FuzzPCAP(f *testing.F) {
 	f.Add(pcapHeader(binary.LittleEndian, false, 101, 1024))
 	f.Add([]byte("bad"))
-	f.Fuzz(func(t *testing.T, b []byte) {
+	f.Fuzz(func(_ *testing.T, b []byte) {
 		reader, err := newPCAPReader(bytes.NewReader(b), 4096)
 		if err == nil {
 			for i := 0; i < 8; i++ {
@@ -123,10 +145,18 @@ func FuzzPCAP(f *testing.F) {
 
 func TestPCAPFCSWireLength(t *testing.T) {
 	header := pcapHeader(binary.LittleEndian, false, 1|0x24000000, 1024)
-	ethernet := make([]byte, 14)
+	ethernet := make([]byte, 14, 46)
 	binary.BigEndian.PutUint16(ethernet[12:], 0x800)
-	data := append(append(ethernet, ipv4Packet(17, 1, 2)...), make([]byte, 4)...)
-	reader, err := newPCAPReader(bytes.NewReader(append(header, pcapRecord(binary.LittleEndian, 1000, 0, uint32(len(data)), data)...)), 1024)
+	ethernet = append(ethernet, ipv4Packet(17, 1, 2)...)
+	ethernet = append(ethernet, make([]byte, 4)...)
+	data := ethernet
+	// #nosec G115 -- The fixture is intentionally much smaller than uint32 capacity.
+	reader, err := newPCAPReader(
+		bytes.NewReader(
+			append(header, pcapRecord(binary.LittleEndian, 1000, 0, testUint32(len(data)), data)...),
+		),
+		1024,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

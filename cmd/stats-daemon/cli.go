@@ -61,7 +61,12 @@ func parseArgs(args []string, output io.Writer) (config.Config, error) {
 	return cfg, nil
 }
 
-func runContext(ctx context.Context, args []string, stdout, stderr io.Writer, serveFn func(context.Context, config.Config) error) int {
+func runContext(
+	ctx context.Context,
+	args []string,
+	stdout, stderr io.Writer,
+	serveFn func(context.Context, config.Config) error,
+) int {
 	cfg, err := parseArgs(args, stdout)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0

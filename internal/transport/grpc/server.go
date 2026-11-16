@@ -35,11 +35,21 @@ func NewServer(provider daemon.Provider, o Options) (*Server, error) {
 	if o.MaxSubscriptions == 0 {
 		o.MaxSubscriptions = 32
 	}
-	if provider == nil || o.MaxWindowSeconds < 1 || o.MaxWindowSeconds > 3600 || o.SendTimeout <= 0 || o.MaxSubscriptions < 1 || o.MaxSubscriptions > 32 {
+	if provider == nil || o.MaxWindowSeconds < 1 || o.MaxWindowSeconds > 3600 ||
+		o.SendTimeout <= 0 ||
+		o.MaxSubscriptions < 1 ||
+		o.MaxSubscriptions > 32 {
 		return nil, fmt.Errorf("invalid server options or provider")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{provider: provider, options: o, clock: realClock{}, slots: make(chan struct{}, o.MaxSubscriptions), ctx: ctx, cancel: cancel}, nil
+	return &Server{
+		provider: provider,
+		options:  o,
+		clock:    realClock{},
+		slots:    make(chan struct{}, o.MaxSubscriptions),
+		ctx:      ctx,
+		cancel:   cancel,
+	}, nil
 }
 
 // Close cancels subscriptions before the owning gRPC server begins graceful stop.

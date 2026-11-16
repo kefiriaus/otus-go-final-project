@@ -18,10 +18,17 @@ func parseLoadAverage(data []byte) (metrics.LoadAverage, error) {
 	for i := range values {
 		value, err := strconv.ParseFloat(fields[i], 64)
 		if err != nil {
-			return metrics.LoadAverage{}, fmt.Errorf("load average %s: %w", [3]string{"load1", "load5", "load15"}[i], err)
+			return metrics.LoadAverage{}, fmt.Errorf(
+				"load average %s: %w",
+				[3]string{"load1", "load5", "load15"}[i],
+				err,
+			)
 		}
 		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
-			return metrics.LoadAverage{}, fmt.Errorf("load average %s: value must be finite and nonnegative", [3]string{"load1", "load5", "load15"}[i])
+			return metrics.LoadAverage{}, fmt.Errorf(
+				"load average %s: value must be finite and nonnegative",
+				[3]string{"load1", "load5", "load15"}[i],
+			)
 		}
 		values[i] = value
 	}

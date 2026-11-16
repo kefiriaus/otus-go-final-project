@@ -21,8 +21,12 @@ func cpuFixture(state statsv1.CollectionState) *statsv1.Snapshot {
 			LastSampleAt:  timestamppb.New(last),
 		}},
 	}
-	if state == statsv1.CollectionState_COLLECTION_STATE_OK || state == statsv1.CollectionState_COLLECTION_STATE_PARTIAL {
-		snapshot.Cpu.Data = &statsv1.CpuUsage{UserPercent: 12.5, SystemPercent: 5.25, IdlePercent: 80, IowaitPercent: 1.25, StealPercent: 1}
+	if state == statsv1.CollectionState_COLLECTION_STATE_OK ||
+		state == statsv1.CollectionState_COLLECTION_STATE_PARTIAL {
+		snapshot.Cpu.Data = &statsv1.CpuUsage{
+			UserPercent: 12.5, SystemPercent: 5.25, IdlePercent: 80,
+			IowaitPercent: 1.25, StealPercent: 1,
+		}
 	}
 	return snapshot
 }
@@ -84,11 +88,35 @@ func TestFormatCPUStates(t *testing.T) {
 		snapshot *statsv1.Snapshot
 		want     string
 	}{
-		{"ok", ok, "window: 2026-11-12T21:00:00Z to 2026-11-12T21:00:15Z\ncpu: OK coverage=100.00% last_sample=2026-11-12T21:00:14Z\n  user=12.50% system=5.25% idle=80.00% iowait=1.25% steal=1.00%\n\n"},
-		{"partial", partial, "window: 2026-11-12T21:00:00Z to 2026-11-12T21:00:15Z\ncpu: PARTIAL coverage=50.00% last_sample=2026-11-12T21:00:14Z\n  detail=cpu degraded\n  user=12.50% system=5.25% idle=80.00% iowait=1.25% steal=1.00%\n\n"},
-		{"unavailable", unavailable, "window: 2026-11-12T21:00:00Z to 2026-11-12T21:00:15Z\ncpu: UNAVAILABLE coverage=0.00%\n  detail=source unavailable\n\n"},
-		{"disabled", disabled, "window: 2026-11-12T21:00:00Z to 2026-11-12T21:00:15Z\ncpu: DISABLED coverage=0.00%\n\n"},
-		{"measured zero", zero, "window: 2026-11-12T21:00:00Z to 2026-11-12T21:00:15Z\ncpu: OK coverage=100.00% last_sample=2026-11-12T21:00:14Z\n  user=0.00% system=0.00% idle=0.00% iowait=0.00% steal=0.00%\n\n"},
+		{
+			"ok", ok,
+			"window: 2026-11-12T21:00:00Z to 2026-11-12T21:00:15Z\n" +
+				"cpu: OK coverage=100.00% last_sample=2026-11-12T21:00:14Z\n" +
+				"  user=12.50% system=5.25% idle=80.00% iowait=1.25% steal=1.00%\n\n",
+		},
+		{
+			"partial", partial,
+			"window: 2026-11-12T21:00:00Z to 2026-11-12T21:00:15Z\n" +
+				"cpu: PARTIAL coverage=50.00% last_sample=2026-11-12T21:00:14Z\n" +
+				"  detail=cpu degraded\n" +
+				"  user=12.50% system=5.25% idle=80.00% iowait=1.25% steal=1.00%\n\n",
+		},
+		{
+			"unavailable", unavailable,
+			"window: 2026-11-12T21:00:00Z to 2026-11-12T21:00:15Z\n" +
+				"cpu: UNAVAILABLE coverage=0.00%\n  detail=source unavailable\n\n",
+		},
+		{
+			"disabled", disabled,
+			"window: 2026-11-12T21:00:00Z to 2026-11-12T21:00:15Z\n" +
+				"cpu: DISABLED coverage=0.00%\n\n",
+		},
+		{
+			"measured zero", zero,
+			"window: 2026-11-12T21:00:00Z to 2026-11-12T21:00:15Z\n" +
+				"cpu: OK coverage=100.00% last_sample=2026-11-12T21:00:14Z\n" +
+				"  user=0.00% system=0.00% idle=0.00% iowait=0.00% steal=0.00%\n\n",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := formatCPU(tt.snapshot)

@@ -20,13 +20,17 @@ func platformSources(cfg config.Config) sources {
 		s.filesystems = collector.NewFilesystemsSource()
 	}
 	if cfg.Subsystems.Connections {
-		s.connections, s.errors[5] = collector.NewConnectionsSource(collector.DefaultConnectionsOptions())
+		s.connections, s.errors[5] = collector.NewConnectionsSource(
+			collector.DefaultConnectionsOptions(),
+		)
 		if s.errors[5] != nil {
 			s.connections = nil
 		}
 	}
 	if cfg.Subsystems.Traffic {
-		s.traffic, s.errors[4] = collector.NewTrafficCapture(collector.DefaultTrafficCaptureOptions())
+		s.traffic, s.errors[4] = collector.NewTrafficCapture(
+			collector.DefaultTrafficCaptureOptions(),
+		)
 		if s.errors[4] != nil {
 			s.traffic = nil
 		}

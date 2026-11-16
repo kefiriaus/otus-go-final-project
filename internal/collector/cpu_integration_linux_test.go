@@ -44,8 +44,19 @@ func TestCPUHistoryIntegration(t *testing.T) {
 		if i != 2 && err != nil {
 			t.Fatal(err)
 		}
-		sample := Sample[metrics.CPUCounters]{StartedAt: base.Add(time.Duration(i) * time.Second), FinishedAt: base.Add(time.Duration(i) * time.Second), Value: value, Err: err}
-		if err := series.Add(aggregate.Event[aggregate.CounterPoint]{At: sample.FinishedAt, Value: aggregate.CPUCounterPoint(sample.Value), Err: sample.Err}); err != nil {
+		sample := Sample[metrics.CPUCounters]{
+			StartedAt:  base.Add(time.Duration(i) * time.Second),
+			FinishedAt: base.Add(time.Duration(i) * time.Second),
+			Value:      value,
+			Err:        err,
+		}
+		if err := series.Add(
+			aggregate.Event[aggregate.CounterPoint]{
+				At:    sample.FinishedAt,
+				Value: aggregate.CPUCounterPoint(sample.Value),
+				Err:   sample.Err,
+			},
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -53,16 +64,27 @@ func TestCPUHistoryIntegration(t *testing.T) {
 		start, end int
 		coverage   float64
 	}{{0, 4, .5}, {3, 6, 2.0 / 3}} {
-		window := aggregate.Window{Start: base.Add(time.Duration(tc.start) * time.Second), End: base.Add(time.Duration(tc.end) * time.Second)}
+		window := aggregate.Window{
+			Start: base.Add(time.Duration(tc.start) * time.Second),
+			End:   base.Add(time.Duration(tc.end) * time.Second),
+		}
 		values, err := series.Read(window)
 		if err != nil {
 			t.Fatal(err)
 		}
 		got, err := aggregate.MeanCPUUsage(window, values)
-		if err != nil || got.Data == nil || !got.Partial || math.Abs(got.CoverageRatio-tc.coverage) > 1e-9 || !got.LastSampleAt.Equal(window.End) {
+		if err != nil || got.Data == nil || !got.Partial ||
+			math.Abs(got.CoverageRatio-tc.coverage) > 1e-9 ||
+			!got.LastSampleAt.Equal(window.End) {
 			t.Fatalf("%+v %v", got, err)
 		}
-		percentages := []float64{got.Data.UserPercent, got.Data.SystemPercent, got.Data.IdlePercent, got.Data.IOWaitPercent, got.Data.StealPercent}
+		percentages := []float64{
+			got.Data.UserPercent,
+			got.Data.SystemPercent,
+			got.Data.IdlePercent,
+			got.Data.IOWaitPercent,
+			got.Data.StealPercent,
+		}
 		for i, want := range []float64{30, 20, 40, 5, 5} {
 			if math.Abs(percentages[i]-want) > 1e-9 {
 				t.Fatalf("category %d got %v want %v", i, percentages[i], want)
@@ -70,11 +92,13 @@ func TestCPUHistoryIntegration(t *testing.T) {
 		}
 		again, _ := series.Read(window)
 		repeated, err := aggregate.MeanCPUUsage(window, again)
-		if err != nil || repeated.Data == nil || *repeated.Data != *got.Data || repeated.CoverageRatio != got.CoverageRatio {
+		if err != nil || repeated.Data == nil || *repeated.Data != *got.Data ||
+			repeated.CoverageRatio != got.CoverageRatio {
 			t.Fatal("another read changed history")
 		}
 	}
 }
+
 func TestCPURealLinux(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

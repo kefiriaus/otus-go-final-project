@@ -39,6 +39,7 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 	}
 	return newRuntime(cfg, platformSources(cfg), time.Now)
 }
+
 func newRuntime(cfg config.Config, src sources, now func() time.Time) (*Runtime, error) {
 	s, err := NewStore(cfg)
 	if err != nil {
@@ -49,7 +50,11 @@ func newRuntime(cfg config.Config, src sources, now func() time.Time) (*Runtime,
 		s.details[i] = detail(e)
 	}
 	if cfg.Subsystems.Traffic && src.traffic != nil {
-		s.traffic, err = aggregate.NewTrafficHistory(cfg.MaxWindowSeconds, src.traffic.Interfaces(), aggregate.DefaultTrafficHistoryOptions())
+		s.traffic, err = aggregate.NewTrafficHistory(
+			cfg.MaxWindowSeconds,
+			src.traffic.Interfaces(),
+			aggregate.DefaultTrafficHistoryOptions(),
+		)
 		if err != nil {
 			s.details[4] = detail(err)
 			src.traffic = nil
@@ -57,6 +62,7 @@ func newRuntime(cfg config.Config, src sources, now func() time.Time) (*Runtime,
 	}
 	return &Runtime{store: s, sources: src}, nil
 }
+
 func (r *Runtime) Snapshot(ctx context.Context, w aggregate.Window) (Snapshot, error) {
 	if r.sources.traffic != nil {
 		e := r.sources.traffic.LastError()
@@ -66,7 +72,11 @@ func (r *Runtime) Snapshot(ctx context.Context, w aggregate.Window) (Snapshot, e
 	}
 	return r.store.Snapshot(ctx, w)
 }
-func periodic[T any](src collector.Source[T], add func(collector.Sample[T]) error) []collector.Worker {
+
+func periodic[T any](
+	src collector.Source[T],
+	add func(collector.Sample[T]) error,
+) []collector.Worker {
 	samples := make(chan collector.Sample[T], 1)
 	return []collector.Worker{
 		func(ctx context.Context) error {
@@ -86,6 +96,7 @@ func periodic[T any](src collector.Source[T], add func(collector.Sample[T]) erro
 		},
 	}
 }
+
 func (r *Runtime) Run(ctx context.Context) error {
 	if !r.started.CompareAndSwap(false, true) {
 		return fmt.Errorf("runtime already started")
@@ -109,7 +120,10 @@ func (r *Runtime) Run(ctx context.Context) error {
 		workers = append(workers, periodic(src.connections, r.store.addConnections)...)
 	}
 	if cfg.Traffic && src.traffic != nil {
-		workers = append(workers, func(ctx context.Context) error { return src.traffic.Run(ctx, trafficSink{r.store}) })
+		workers = append(
+			workers,
+			func(ctx context.Context) error { return src.traffic.Run(ctx, trafficSink{r.store}) },
+		)
 	}
 	return collector.RunGroup(ctx, workers...)
 }

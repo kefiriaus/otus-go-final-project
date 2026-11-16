@@ -12,41 +12,68 @@ func cloneConnectionField[T any](value *T) *T {
 	if value == nil {
 		return nil
 	}
-	copy := *value
-	return &copy
+	cloned := *value
+	return &cloned
 }
 
-// LatestConnections returns the last socket/state observation, never an average.
-// Returned slices and optional owner fields do not alias retained history.
-func LatestConnections(window Window, values []Interval[metrics.Connections]) (Summary[metrics.Connections], error) {
+func validListeningSocket(socket metrics.ListeningSocket) bool {
+	return socket.Local.Address.IsValid() && socket.Local.Address.Zone() == "" &&
+		socket.Local.HasPort && (socket.Protocol == 6 || socket.Protocol == 17)
+}
+
+func validProcessOwner(owner metrics.ProcessOwner) bool {
+	return (owner.PID == nil || *owner.PID != 0) &&
+		(owner.Command == nil || utf8.ValidString(*owner.Command)) &&
+		(owner.User == nil || utf8.ValidString(*owner.User))
+}
+
+func validateConnections(values []Interval[metrics.Connections]) error {
 	for _, v := range values {
 		states := make(map[string]bool, len(v.Value.TCPStates))
 		for _, state := range v.Value.TCPStates {
 			if state.State == "" || !utf8.ValidString(state.State) || states[state.State] {
-				return Summary[metrics.Connections]{}, fmt.Errorf("invalid or duplicate TCP state")
+				return fmt.Errorf("invalid or duplicate TCP state")
 			}
 			states[state.State] = true
 		}
 		for _, socket := range v.Value.ListeningSockets {
-			if !socket.Local.Address.IsValid() || socket.Local.Address.Zone() != "" || !socket.Local.HasPort || (socket.Protocol != 6 && socket.Protocol != 17) {
-				return Summary[metrics.Connections]{}, fmt.Errorf("invalid listening socket endpoint or protocol")
+			if !validListeningSocket(socket) {
+				return fmt.Errorf("invalid listening socket endpoint or protocol")
 			}
 			for _, owner := range socket.Owners {
-				if owner.PID != nil && *owner.PID == 0 || owner.Command != nil && !utf8.ValidString(*owner.Command) || owner.User != nil && !utf8.ValidString(*owner.User) {
-					return Summary[metrics.Connections]{}, fmt.Errorf("invalid process owner metadata")
+				if !validProcessOwner(owner) {
+					return fmt.Errorf("invalid process owner metadata")
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// LatestConnections returns the last socket/state observation, never an average.
+// Returned slices and optional owner fields do not alias retained history.
+func LatestConnections(
+	window Window,
+	values []Interval[metrics.Connections],
+) (Summary[metrics.Connections], error) {
+	if err := validateConnections(values); err != nil {
+		return Summary[metrics.Connections]{}, err
 	}
 	result, err := Latest(window, values)
 	if err != nil || result.Data == nil {
 		return result, err
 	}
-	data := metrics.Connections{TCPStates: slices.Clone(result.Data.TCPStates), ListeningSockets: slices.Clone(result.Data.ListeningSockets)}
+	data := metrics.Connections{
+		TCPStates:        slices.Clone(result.Data.TCPStates),
+		ListeningSockets: slices.Clone(result.Data.ListeningSockets),
+	}
 	for i := range data.ListeningSockets {
 		data.ListeningSockets[i].Owners = slices.Clone(data.ListeningSockets[i].Owners)
 		for j, owner := range data.ListeningSockets[i].Owners {
-			data.ListeningSockets[i].Owners[j] = metrics.ProcessOwner{PID: cloneConnectionField(owner.PID), Command: cloneConnectionField(owner.Command), User: cloneConnectionField(owner.User)}
+			data.ListeningSockets[i].Owners[j] = metrics.ProcessOwner{
+				PID: cloneConnectionField(owner.PID), Command: cloneConnectionField(owner.Command),
+				User: cloneConnectionField(owner.User),
+			}
 		}
 	}
 	result.Data = &data

@@ -25,9 +25,26 @@ type connectionHistory struct {
 
 // Clone exact-length storage so accounting cannot retain a larger backing slice.
 func cloneConnections(v metrics.Connections) (metrics.Connections, int) {
-	out := metrics.Connections{ListeningSockets: make([]metrics.ListeningSocket, len(v.ListeningSockets)), TCPStates: make([]metrics.TCPStateCount, len(v.TCPStates))}
-	n := int(unsafe.Sizeof(out)) + int(unsafe.Sizeof(aggregate.Interval[metrics.Connections]{})) + int(unsafe.Sizeof(connectionCharge{}))
-	n += len(out.ListeningSockets)*int(unsafe.Sizeof(metrics.ListeningSocket{})) + len(out.TCPStates)*int(unsafe.Sizeof(metrics.TCPStateCount{}))
+	out := metrics.Connections{
+		ListeningSockets: make([]metrics.ListeningSocket, len(v.ListeningSockets)),
+		TCPStates:        make([]metrics.TCPStateCount, len(v.TCPStates)),
+	}
+	n := int(
+		unsafe.Sizeof(out),
+	) + int(
+		unsafe.Sizeof(aggregate.Interval[metrics.Connections]{}),
+	) + int(
+		unsafe.Sizeof(connectionCharge{}),
+	)
+	n += len(
+		out.ListeningSockets,
+	)*int(
+		unsafe.Sizeof(metrics.ListeningSocket{}),
+	) + len(
+		out.TCPStates,
+	)*int(
+		unsafe.Sizeof(metrics.TCPStateCount{}),
+	)
 	for i, state := range v.TCPStates {
 		state.State = strings.Clone(state.State)
 		out.TCPStates[i] = state
@@ -57,6 +74,7 @@ func cloneConnections(v metrics.Connections) (metrics.Connections, int) {
 	}
 	return out, n
 }
+
 func (h *connectionHistory) add(v collector.Sample[metrics.ConnectionsObservation]) error {
 	h.diagnostic = detail(v.Err)
 	retentionCutoff := v.FinishedAt.Add(-h.retention)
@@ -71,7 +89,9 @@ func (h *connectionHistory) add(v collector.Sample[metrics.ConnectionsObservatio
 			charge = 0
 		}
 	}
-	for len(h.charges) > 0 && (!h.charges[0].at.After(retentionCutoff) || h.bytes+charge > h.limit || len(h.charges) >= h.maxEntries) {
+	for len(h.charges) > 0 &&
+		(!h.charges[0].at.After(retentionCutoff) || h.bytes+charge > h.limit ||
+			len(h.charges) >= h.maxEntries) {
 		oldest := h.charges[0]
 		h.bytes -= oldest.bytes
 		copy(h.charges, h.charges[1:])
@@ -84,7 +104,14 @@ func (h *connectionHistory) add(v collector.Sample[metrics.ConnectionsObservatio
 	if err := h.series.PruneBefore(cutoff); err != nil {
 		return err
 	}
-	if err := h.series.Add(aggregate.Event[metrics.Connections]{At: v.FinishedAt, Value: value, Err: v.Err, Partial: v.Value.Partial}); err != nil {
+	if err := h.series.Add(
+		aggregate.Event[metrics.Connections]{
+			At:      v.FinishedAt,
+			Value:   value,
+			Err:     v.Err,
+			Partial: v.Value.Partial,
+		},
+	); err != nil {
 		return err
 	}
 	if v.Err == nil {

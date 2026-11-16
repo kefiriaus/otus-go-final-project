@@ -32,6 +32,7 @@ func supportedTrafficLink(link uint32) bool {
 	}
 	return false
 }
+
 func newPCAPReader(input io.Reader, maxFrameBytes int) (*pcapReader, error) {
 	if maxFrameBytes < 1 || maxFrameBytes > maxTrafficFrameBytes {
 		return nil, fmt.Errorf("invalid PCAP frame bound")
@@ -61,7 +62,9 @@ func newPCAPReader(input io.Reader, maxFrameBytes int) (*pcapReader, error) {
 	r.snap = r.order.Uint32(h[16:])
 	word := r.order.Uint32(h[20:])
 	r.link = word & 0xffff
-	if r.snap == 0 || r.snap > uint32(maxFrameBytes) || word&0x0bff0000 != 0 || (word&0x04000000 == 0 && word&0xf0000000 != 0) || !supportedTrafficLink(r.link) {
+	if r.snap == 0 || r.snap > uint32(maxFrameBytes) || word&0x0bff0000 != 0 ||
+		(word&0x04000000 == 0 && word&0xf0000000 != 0) ||
+		!supportedTrafficLink(r.link) {
 		return nil, fmt.Errorf("invalid PCAP snaplen, link type, or flags")
 	}
 	if word&0x04000000 != 0 {
@@ -81,7 +84,13 @@ func (r *pcapReader) Next() (pcapFrame, error) {
 		}
 		return pcapFrame{}, fmt.Errorf("PCAP record header: %w", err)
 	}
-	fraction, captured, original := r.order.Uint32(h[4:]), r.order.Uint32(h[8:]), r.order.Uint32(h[12:])
+	fraction, captured, original := r.order.Uint32(
+		h[4:],
+	), r.order.Uint32(
+		h[8:],
+	), r.order.Uint32(
+		h[12:],
+	)
 	limit := uint32(1000000)
 	multiplier := int64(1000)
 	if r.nano {
@@ -95,5 +104,11 @@ func (r *pcapReader) Next() (pcapFrame, error) {
 	if _, err := io.ReadFull(r.input, data); err != nil {
 		return pcapFrame{}, fmt.Errorf("PCAP frame: %w", err)
 	}
-	return pcapFrame{At: time.Unix(int64(r.order.Uint32(h[:])), int64(fraction)*multiplier).UTC(), LinkType: r.link, OriginalLength: original, FCSBytes: r.fcs, Data: data}, nil
+	return pcapFrame{
+		At:             time.Unix(int64(r.order.Uint32(h[:])), int64(fraction)*multiplier).UTC(),
+		LinkType:       r.link,
+		OriginalLength: original,
+		FCSBytes:       r.fcs,
+		Data:           data,
+	}, nil
 }

@@ -1,8 +1,9 @@
 package collector
 
 import (
-	"github.com/kefiriaus/otus-go-final-project/internal/metrics"
 	"time"
+
+	"github.com/kefiriaus/otus-go-final-project/internal/metrics"
 )
 
 // TrafficSink callbacks must return promptly and be safe for concurrent use.

@@ -40,7 +40,11 @@ func LoadJSON(r io.Reader) (Config, error) {
 		return Config{}, fmt.Errorf("configuration: %w", err)
 	}
 	cfg := Default()
-	if err := decodeValue("max_window_seconds", file.MaxWindowSeconds, &cfg.MaxWindowSeconds); err != nil {
+	if err := decodeValue(
+		"max_window_seconds",
+		file.MaxWindowSeconds,
+		&cfg.MaxWindowSeconds,
+	); err != nil {
 		return Config{}, err
 	}
 	if len(file.Subsystems) > 0 {

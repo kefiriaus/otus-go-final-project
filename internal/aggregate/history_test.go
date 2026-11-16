@@ -10,6 +10,7 @@ import (
 func interval[T any](start, end float64, value T) Interval[T] {
 	return Interval[T]{Start: at(start), End: at(end), ObservedAt: at(start), Value: value}
 }
+
 func TestHistory(t *testing.T) {
 	h, err := NewHistory[int](2, 4)
 	if err != nil {
@@ -37,7 +38,10 @@ func TestHistory(t *testing.T) {
 		t.Fatal("read aliases storage")
 	}
 	before, _ := h.Read(Window{at(0), at(20)})
-	for _, bad := range []Interval[int]{interval(9, 11, 1), interval(11, 11, 1), interval(11, 10, 1), {Start: at(11), End: at(12)}} {
+	for _, bad := range []Interval[int]{
+		interval(9, 11, 1), interval(11, 11, 1), interval(11, 10, 1),
+		{Start: at(11), End: at(12)},
+	} {
 		if h.Append(bad) == nil {
 			t.Fatal("accepted invalid interval")
 		}
@@ -52,6 +56,7 @@ func TestHistory(t *testing.T) {
 		}
 	}
 }
+
 func TestHistoryRetention(t *testing.T) {
 	h, _ := NewHistory[int](1, 20)
 	for i := 0; i < 10; i++ {
@@ -77,6 +82,7 @@ func TestHistoryRetention(t *testing.T) {
 		}
 	}
 }
+
 func TestHistoryConcurrent(t *testing.T) {
 	h, _ := NewHistory[int](10, 12)
 	var wg sync.WaitGroup

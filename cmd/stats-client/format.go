@@ -19,12 +19,18 @@ func formatCPU(snapshot *statsv1.Snapshot) (string, error) {
 	if snapshot.Cpu.Status == nil {
 		return "", fmt.Errorf("nil CPU status")
 	}
-	for name, timestamp := range map[string]*timestamppb.Timestamp{"window start": snapshot.WindowStart, "window end": snapshot.WindowEnd} {
-		if timestamp == nil {
-			return "", fmt.Errorf("nil %s timestamp", name)
+	for _, item := range []struct {
+		name      string
+		timestamp *timestamppb.Timestamp
+	}{
+		{"window start", snapshot.WindowStart},
+		{"window end", snapshot.WindowEnd},
+	} {
+		if item.timestamp == nil {
+			return "", fmt.Errorf("nil %s timestamp", item.name)
 		}
-		if err := timestamp.CheckValid(); err != nil {
-			return "", fmt.Errorf("invalid %s timestamp: %w", name, err)
+		if err := item.timestamp.CheckValid(); err != nil {
+			return "", fmt.Errorf("invalid %s timestamp: %w", item.name, err)
 		}
 	}
 	status := snapshot.Cpu.Status
@@ -35,18 +41,34 @@ func formatCPU(snapshot *statsv1.Snapshot) (string, error) {
 	}
 	state := strings.TrimPrefix(status.State.String(), "COLLECTION_STATE_")
 	var out strings.Builder
-	fmt.Fprintf(&out, "window: %s to %s\n", snapshot.WindowStart.AsTime().UTC().Format(time.RFC3339Nano), snapshot.WindowEnd.AsTime().UTC().Format(time.RFC3339Nano))
+	windowStart := snapshot.WindowStart.AsTime().UTC().Format(time.RFC3339Nano)
+	windowEnd := snapshot.WindowEnd.AsTime().UTC().Format(time.RFC3339Nano)
+	fmt.Fprintf(&out, "window: %s to %s\n", windowStart, windowEnd)
 	fmt.Fprintf(&out, "cpu: %s coverage=%.2f%%", state, status.CoverageRatio*100)
 	if status.LastSampleAt != nil {
-		fmt.Fprintf(&out, " last_sample=%s", status.LastSampleAt.AsTime().UTC().Format(time.RFC3339Nano))
+		fmt.Fprintf(
+			&out,
+			" last_sample=%s",
+			status.LastSampleAt.AsTime().UTC().Format(time.RFC3339Nano),
+		)
 	}
 	out.WriteByte('\n')
 	if status.Detail != "" {
 		fmt.Fprintf(&out, "  detail=%s\n", status.Detail)
 	}
-	if snapshot.Cpu.Data != nil && (status.State == statsv1.CollectionState_COLLECTION_STATE_OK || status.State == statsv1.CollectionState_COLLECTION_STATE_PARTIAL) {
+	collecting := status.State == statsv1.CollectionState_COLLECTION_STATE_OK ||
+		status.State == statsv1.CollectionState_COLLECTION_STATE_PARTIAL
+	if snapshot.Cpu.Data != nil && collecting {
 		data := snapshot.Cpu.Data
-		fmt.Fprintf(&out, "  user=%.2f%% system=%.2f%% idle=%.2f%% iowait=%.2f%% steal=%.2f%%\n", data.UserPercent, data.SystemPercent, data.IdlePercent, data.IowaitPercent, data.StealPercent)
+		fmt.Fprintf(
+			&out,
+			"  user=%.2f%% system=%.2f%% idle=%.2f%% iowait=%.2f%% steal=%.2f%%\n",
+			data.UserPercent,
+			data.SystemPercent,
+			data.IdlePercent,
+			data.IowaitPercent,
+			data.StealPercent,
+		)
 	}
 	out.WriteByte('\n')
 	return out.String(), nil

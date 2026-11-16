@@ -14,7 +14,13 @@ import (
 	"github.com/kefiriaus/otus-go-final-project/internal/metrics"
 )
 
-const diskFixtureStat = "10 0 20 0 5 0 10 0 0 0 0\n"
+const (
+	diskFixtureStat     = "10 0 20 0 5 0 10 0 0 0 0\n"
+	testNVMeDevice      = "nvme0n1"
+	testSCSIDevice      = "sda"
+	testDeviceIdentity  = "8:0"
+	testRegularFileMode = "regular file"
+)
 
 func diskFixture(names ...string) fstest.MapFS {
 	result := fstest.MapFS{"block": &fstest.MapFile{Mode: fs.ModeDir}}
@@ -70,9 +76,9 @@ func (d *diskDir) ReadDir(n int) ([]fs.DirEntry, error) {
 }
 
 func TestDiskIOSource(t *testing.T) {
-	names := []string{"sda", "nvme0n1", "mmcblk0", "dm-0", "md0", "loop0"}
+	names := []string{testSCSIDevice, testNVMeDevice, "mmcblk0", "dm-0", "md0", "loop0"}
 	fixture := diskFixture(names...)
-	var entries []fs.DirEntry
+	entries := make([]fs.DirEntry, 0, len(names))
 	for _, name := range names {
 		entries = append(entries, diskDirEntry(name))
 	}
@@ -90,66 +96,92 @@ func TestDiskIOSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var devices []string
+	devices := make([]string, 0, len(got.Readings))
 	for _, r := range got.Readings {
 		devices = append(devices, r.Device)
-		if r.Err != nil || r.Counters.Identity != "8:0" || r.Counters.ReadsCompleted != 10 || r.Counters.SectorsWritten != 10 {
+		if r.Err != nil || r.Counters.Identity != testDeviceIdentity ||
+			r.Counters.ReadsCompleted != 10 ||
+			r.Counters.SectorsWritten != 10 {
 			t.Fatalf("%+v", r)
 		}
 	}
-	if !reflect.DeepEqual(devices, []string{"dm-0", "loop0", "md0", "mmcblk0", "nvme0n1", "sda"}) {
+	if !reflect.DeepEqual(
+		devices,
+		[]string{"dm-0", "loop0", "md0", "mmcblk0", testNVMeDevice, testSCSIDevice},
+	) {
 		t.Fatal(devices)
 	}
 }
+
+func diskDeviceErrorSource(mode string, sentinel error) (*DiskIOSource, *diskFile, error) {
+	fixture := diskFixture("bad", "good")
+	target := "block/bad/stat"
+	cause := sentinel
+	switch mode {
+	case testMissingMode:
+		delete(fixture, target)
+		cause = fs.ErrNotExist
+	case "dev parse":
+		fixture["block/bad/dev"].Data = []byte("invalid")
+		cause = nil
+	case "stat parse":
+		fixture[target].Data = []byte("invalid")
+		cause = nil
+	}
+	file := &diskFile{Reader: strings.NewReader(diskFixtureStat)}
+	if mode == testReadMode {
+		file.Reader = diskReader(func(p []byte) (int, error) {
+			return copy(p, diskFixtureStat), sentinel
+		})
+	}
+	if mode == testCloseMode {
+		file.closeErr = sentinel
+	}
+	source := NewDiskIOSource()
+	source.sysFS = diskFS(func(name string) (fs.File, error) {
+		if name == target && (mode == testOpenMode || mode == testReadMode || mode == testCloseMode) {
+			if mode == testOpenMode {
+				return nil, sentinel
+			}
+			return file, nil
+		}
+		return fixture.Open(name)
+	})
+	return source, file, cause
+}
+
+func checkDiskDeviceError(
+	t *testing.T,
+	got metrics.DiskIOObservation,
+	err error,
+	cause error,
+	file *diskFile,
+	mode string,
+) {
+	t.Helper()
+	if err != nil || len(got.Readings) != 2 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	bad, good := got.Readings[0], got.Readings[1]
+	if bad.Err == nil || bad.Counters != (metrics.DiskIOCounters{}) || good.Err != nil ||
+		good.Device != "good" {
+		t.Fatalf("%+v", got)
+	}
+	if cause != nil && !errors.Is(bad.Err, cause) {
+		t.Fatalf("lost cause: %v", bad.Err)
+	}
+	if (mode == testReadMode || mode == testCloseMode) && !file.closed {
+		t.Fatal("file not closed")
+	}
+}
+
 func TestDiskIOSourceDeviceErrors(t *testing.T) {
 	sentinel := errors.New("device read failed")
-	for _, mode := range []string{"missing", "dev parse", "stat parse", "open", "read", "close"} {
+	for _, mode := range []string{testMissingMode, "dev parse", "stat parse", testOpenMode, testReadMode, testCloseMode} {
 		t.Run(mode, func(t *testing.T) {
-			fixture := diskFixture("bad", "good")
-			target := "block/bad/stat"
-			cause := sentinel
-			switch mode {
-			case "missing":
-				delete(fixture, target)
-				cause = fs.ErrNotExist
-			case "dev parse":
-				fixture["block/bad/dev"].Data = []byte("invalid")
-				cause = nil
-			case "stat parse":
-				fixture[target].Data = []byte("invalid")
-				cause = nil
-			}
-			file := &diskFile{Reader: strings.NewReader(diskFixtureStat)}
-			if mode == "read" {
-				file.Reader = diskReader(func(p []byte) (int, error) { return copy(p, diskFixtureStat), sentinel })
-			}
-			if mode == "close" {
-				file.closeErr = sentinel
-			}
-			source := NewDiskIOSource()
-			source.sysFS = diskFS(func(name string) (fs.File, error) {
-				if name == target && (mode == "open" || mode == "read" || mode == "close") {
-					if mode == "open" {
-						return nil, sentinel
-					}
-					return file, nil
-				}
-				return fixture.Open(name)
-			})
+			source, file, cause := diskDeviceErrorSource(mode, sentinel)
 			got, err := source.Collect(context.Background())
-			if err != nil || len(got.Readings) != 2 {
-				t.Fatalf("%+v %v", got, err)
-			}
-			bad, good := got.Readings[0], got.Readings[1]
-			if bad.Err == nil || bad.Counters != (metrics.DiskIOCounters{}) || good.Err != nil || good.Device != "good" {
-				t.Fatalf("%+v", got)
-			}
-			if cause != nil && !errors.Is(bad.Err, cause) {
-				t.Fatalf("lost cause: %v", bad.Err)
-			}
-			if (mode == "read" || mode == "close") && !file.closed {
-				t.Fatal("file not closed")
-			}
+			checkDiskDeviceError(t, got, err, cause, file, mode)
 		})
 	}
 	fixture := diskFixture("bad")
@@ -161,6 +193,7 @@ func TestDiskIOSourceDeviceErrors(t *testing.T) {
 		t.Fatalf("all failed: %+v %v", got, err)
 	}
 }
+
 func TestDiskIOSourceEnumeration(t *testing.T) {
 	source := NewDiskIOSource()
 	source.sysFS = diskFixture()
@@ -173,14 +206,16 @@ func TestDiskIOSourceEnumeration(t *testing.T) {
 		t.Fatal(err)
 	}
 	sentinel := errors.New("directory failure")
-	for _, mode := range []string{"read", "close", "over limit", "duplicate", "invalid name", "regular file"} {
+	for _, mode := range []string{
+		testReadMode, testCloseMode, "over limit", "duplicate", "invalid name", testRegularFileMode,
+	} {
 		t.Run(mode, func(t *testing.T) {
-			dir := &diskDir{entries: []fs.DirEntry{diskDirEntry("sda")}}
+			dir := &diskDir{entries: []fs.DirEntry{diskDirEntry(testSCSIDevice)}}
 			cause := sentinel
 			switch mode {
-			case "read":
+			case testReadMode:
 				dir.readErr = sentinel
-			case "close":
+			case testCloseMode:
 				dir.closeErr = sentinel
 			case "over limit":
 				for i := 1; i < 129; i++ {
@@ -188,17 +223,17 @@ func TestDiskIOSourceEnumeration(t *testing.T) {
 				}
 				cause = nil
 			case "duplicate":
-				dir.entries = append(dir.entries, diskDirEntry("sda"))
+				dir.entries = append(dir.entries, diskDirEntry(testSCSIDevice))
 				cause = nil
 			case "invalid name":
 				dir.entries = []fs.DirEntry{diskDirEntry("../escape")}
 				cause = nil
-			case "regular file":
+			case testRegularFileMode:
 				cause = nil
 			}
 			source := NewDiskIOSource()
 			source.sysFS = diskFS(func(string) (fs.File, error) {
-				if mode == "regular file" {
+				if mode == testRegularFileMode {
 					return &dir.diskFile, nil
 				}
 				return dir, nil
@@ -210,7 +245,7 @@ func TestDiskIOSourceEnumeration(t *testing.T) {
 			if cause != nil && !errors.Is(err, cause) {
 				t.Fatal(err)
 			}
-			if mode != "regular file" && dir.requested != 129 {
+			if mode != testRegularFileMode && dir.requested != 129 {
 				t.Fatalf("unbounded enumeration: %d", dir.requested)
 			}
 		})
@@ -218,7 +253,7 @@ func TestDiskIOSourceEnumeration(t *testing.T) {
 	fixture := diskFixture()
 	for i := 0; i < 128; i++ {
 		name := fmt.Sprintf("dev%03d", i)
-		fixture["block/"+name+"/dev"] = &fstest.MapFile{Data: []byte("8:0")}
+		fixture["block/"+name+"/dev"] = &fstest.MapFile{Data: []byte(testDeviceIdentity)}
 		fixture["block/"+name+"/stat"] = &fstest.MapFile{Data: []byte(diskFixtureStat)}
 	}
 	source.sysFS = fixture
@@ -227,14 +262,15 @@ func TestDiskIOSourceEnumeration(t *testing.T) {
 		t.Fatalf("boundary: %d %v", len(boundary.Readings), err)
 	}
 }
+
 func TestDiskIOSourceReadBounds(t *testing.T) {
-	for _, target := range []string{"stat", "dev"} {
+	for _, target := range []string{testStatName, "dev"} {
 		limit, valid := 4096, strings.TrimSpace(diskFixtureStat)
 		if target == "dev" {
-			limit, valid = 128, "8:0"
+			limit, valid = 128, testDeviceIdentity
 		}
 		for _, size := range []int{limit, limit + 1, limit + 100} {
-			fixture := diskFixture("sda")
+			fixture := diskFixture(testSCSIDevice)
 			var files []*diskFile
 			source := NewDiskIOSource()
 			source.sysFS = diskFS(func(name string) (fs.File, error) {
@@ -269,18 +305,25 @@ func TestDiskIOSourceReadBounds(t *testing.T) {
 		}
 	}
 }
+
 func TestDiskIOSourceCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	source := NewDiskIOSource()
-	source.sysFS = diskFS(func(string) (fs.File, error) { t.Fatal("opened after cancellation"); return nil, nil })
+	source.sysFS = diskFS(
+		func(string) (fs.File, error) { t.Fatal("opened after cancellation"); return nil, nil },
+	)
 	if _, err := source.Collect(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
-	fixture := diskFixture("sda", "sdb")
-	file := &diskFile{Reader: diskReader(func(p []byte) (int, error) { cancel(); return copy(p, diskFixtureStat), io.EOF })}
+	fixture := diskFixture(testSCSIDevice, "sdb")
+	file := &diskFile{
+		Reader: diskReader(
+			func(p []byte) (int, error) { cancel(); return copy(p, diskFixtureStat), io.EOF },
+		),
+	}
 	source.sysFS = diskFS(func(name string) (fs.File, error) {
 		if name == "block/sda/stat" {
 			return file, nil
@@ -297,7 +340,7 @@ func TestDiskIOSourceCancellation(t *testing.T) {
 }
 
 func TestDiskIOSourceIdentityChangesDuringRead(t *testing.T) {
-	fixture := diskFixture("sda")
+	fixture := diskFixture(testSCSIDevice)
 	source := NewDiskIOSource()
 	source.sysFS = diskFS(func(name string) (fs.File, error) {
 		file, err := fixture.Open(name)
@@ -307,7 +350,8 @@ func TestDiskIOSourceIdentityChangesDuringRead(t *testing.T) {
 		return file, err
 	})
 	got, err := source.Collect(context.Background())
-	if err != nil || len(got.Readings) != 1 || got.Readings[0].Err == nil || got.Readings[0].Counters != (metrics.DiskIOCounters{}) {
+	if err != nil || len(got.Readings) != 1 || got.Readings[0].Err == nil ||
+		got.Readings[0].Counters != (metrics.DiskIOCounters{}) {
 		t.Fatalf("accepted inconsistent device sample: %+v %v", got, err)
 	}
 }

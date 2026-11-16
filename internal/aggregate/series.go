@@ -55,7 +55,9 @@ func (s *GaugeSeries[T]) Add(event Event[T]) error {
 		if event.At.Before(end) {
 			end = event.At
 		}
-		if err := s.history.Append(Interval[T]{Start: p.At, End: end, ObservedAt: p.At, Value: p.Value, Partial: p.Partial}); err != nil {
+		if err := s.history.Append(Interval[T]{
+			Start: p.At, End: end, ObservedAt: p.At, Value: p.Value, Partial: p.Partial,
+		}); err != nil {
 			return err
 		}
 	}
@@ -80,7 +82,13 @@ func (s *GaugeSeries[T]) Read(window Window) ([]Interval[T], error) {
 		if window.End.Before(end) {
 			end = window.End
 		}
-		v := Interval[T]{Start: p.At, End: end, ObservedAt: p.At, Value: p.Value, Partial: p.Partial}
+		v := Interval[T]{
+			Start:      p.At,
+			End:        end,
+			ObservedAt: p.At,
+			Value:      p.Value,
+			Partial:    p.Partial,
+		}
 		if v.Start.Before(v.End) && v.intersects(window) {
 			result = append(result, v)
 		}
@@ -113,6 +121,29 @@ func NewCounterSeries(maxWindowSeconds int) (*CounterSeries, error) {
 	return &CounterSeries{history: h}, nil
 }
 
+func (s *CounterSeries) appendCounterTransition(event Event[CounterPoint]) error {
+	previous := s.baseline
+	if previous == nil {
+		return nil
+	}
+	duration := event.At.Sub(previous.At)
+	if duration > 1100*time.Millisecond || event.Value.Generation != previous.Value.Generation ||
+		len(event.Value.Values) != len(previous.Value.Values) {
+		return nil
+	}
+	rates := make([]float64, len(event.Value.Values))
+	for i, value := range event.Value.Values {
+		if value < previous.Value.Values[i] {
+			return nil
+		}
+		rates[i] = float64(value-previous.Value.Values[i]) / duration.Seconds()
+	}
+	return s.history.Append(Interval[[]float64]{
+		Start: previous.At, End: event.At, ObservedAt: event.At,
+		Value: rates, Partial: previous.Partial || event.Partial,
+	})
+}
+
 // Add breaks continuity on errors, resets, generation changes, and long gaps.
 func (s *CounterSeries) Add(event Event[CounterPoint]) error {
 	s.mu.Lock()
@@ -129,27 +160,8 @@ func (s *CounterSeries) Add(event Event[CounterPoint]) error {
 		s.baseline = nil
 		return nil
 	}
-	if previous := s.baseline; previous != nil {
-		duration := event.At.Sub(previous.At)
-		valid := duration <= 1100*time.Millisecond && event.Value.Generation == previous.Value.Generation && len(event.Value.Values) == len(previous.Value.Values)
-		if valid {
-			for i, value := range event.Value.Values {
-				if value < previous.Value.Values[i] {
-					valid = false
-					break
-				}
-			}
-		}
-		if valid {
-			rates := make([]float64, len(event.Value.Values))
-			for i, value := range event.Value.Values {
-				rates[i] = float64(value-previous.Value.Values[i]) / duration.Seconds()
-			}
-			v := Interval[[]float64]{Start: previous.At, End: event.At, ObservedAt: event.At, Value: rates, Partial: previous.Partial || event.Partial}
-			if err := s.history.Append(v); err != nil {
-				return err
-			}
-		}
+	if err := s.appendCounterTransition(event); err != nil {
+		return err
 	}
 	event.Value.Values = slices.Clone(event.Value.Values)
 	s.baseline = &event

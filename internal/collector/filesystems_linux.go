@@ -50,7 +50,9 @@ func (s *FilesystemsSource) Collect(ctx context.Context) (metrics.FilesystemObse
 	if err != nil {
 		return metrics.FilesystemObservation{}, err
 	}
-	result := metrics.FilesystemObservation{Readings: make([]metrics.FilesystemReading, 0, len(selected))}
+	result := metrics.FilesystemObservation{
+		Readings: make([]metrics.FilesystemReading, 0, len(selected)),
+	}
 	for _, mount := range selected {
 		if err := ctx.Err(); err != nil {
 			return metrics.FilesystemObservation{}, err
@@ -62,20 +64,34 @@ func (s *FilesystemsSource) Collect(ctx context.Context) (metrics.FilesystemObse
 		}
 		var usage metrics.FilesystemUsage
 		if err == nil {
-			size := int64(raw.Frsize)
+			size := raw.Frsize
 			if size <= 0 {
-				size = int64(raw.Bsize)
+				size = raw.Bsize
 			}
 			if size <= 0 {
 				err = fmt.Errorf("nonpositive filesystem accounting block size")
 			} else {
-				usage, err = filesystemUsage(mount, filesystemStats{BlockSize: uint64(size), Blocks: raw.Blocks, FreeBlocks: raw.Bfree, Files: raw.Files, FreeFiles: raw.Ffree, InodesKnown: raw.Files > 0 && raw.Files != math.MaxUint64 && raw.Ffree != math.MaxUint64})
+				usage, err = filesystemUsage(
+					mount,
+					filesystemStats{
+						BlockSize:  uint64(size),
+						Blocks:     raw.Blocks,
+						FreeBlocks: raw.Bfree,
+						Files:      raw.Files,
+						FreeFiles:  raw.Ffree,
+						InodesKnown: raw.Files > 0 && raw.Files != math.MaxUint64 &&
+							raw.Ffree != math.MaxUint64,
+					},
+				)
 			}
 		}
 		if err != nil {
 			err = fmt.Errorf("filesystem %q: %w", mount.MountPoint, err)
 		}
-		result.Readings = append(result.Readings, metrics.FilesystemReading{MountPoint: mount.MountPoint, Usage: usage, Err: err})
+		result.Readings = append(
+			result.Readings,
+			metrics.FilesystemReading{MountPoint: mount.MountPoint, Usage: usage, Err: err},
+		)
 	}
 	if err := ctx.Err(); err != nil {
 		return metrics.FilesystemObservation{}, err

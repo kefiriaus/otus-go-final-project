@@ -12,7 +12,10 @@ import (
 )
 
 func receive(ctx context.Context, options clientOptions, output io.Writer) error {
-	connection, err := grpc.NewClient(options.address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	connection, err := grpc.NewClient(
+		options.address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
 		return fmt.Errorf("create gRPC client: %w", err)
 	}
@@ -20,8 +23,16 @@ func receive(ctx context.Context, options clientOptions, output io.Writer) error
 	return receiveSnapshots(ctx, statsv1.NewStatsServiceClient(connection), options, output)
 }
 
-func receiveSnapshots(ctx context.Context, client statsv1.StatsServiceClient, options clientOptions, output io.Writer) error {
-	stream, err := client.Subscribe(ctx, &statsv1.SubscribeRequest{IntervalSeconds: options.intervalSeconds, WindowSeconds: options.windowSeconds})
+func receiveSnapshots(
+	ctx context.Context,
+	client statsv1.StatsServiceClient,
+	options clientOptions,
+	output io.Writer,
+) error {
+	stream, err := client.Subscribe(ctx, &statsv1.SubscribeRequest{
+		IntervalSeconds: options.intervalSeconds,
+		WindowSeconds:   options.windowSeconds,
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()

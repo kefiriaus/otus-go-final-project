@@ -9,7 +9,9 @@ func TestPruneBefore(t *testing.T) {
 	at := time.Unix(100, 0).UTC()
 	h, _ := NewHistory[*int](10, 12)
 	n := 1
-	if err := h.Append(Interval[*int]{Start: at, End: at.Add(10 * time.Second), ObservedAt: at, Value: &n}); err != nil {
+	if err := h.Append(
+		Interval[*int]{Start: at, End: at.Add(10 * time.Second), ObservedAt: at, Value: &n},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.PruneBefore(at.Add(4 * time.Second)); err != nil {
@@ -31,6 +33,7 @@ func TestPruneBefore(t *testing.T) {
 		t.Fatal("zero cutoff accepted")
 	}
 }
+
 func TestSeriesPruning(t *testing.T) {
 	at := time.Unix(100, 0).UTC()
 	s, _ := NewCounterSeries(10)

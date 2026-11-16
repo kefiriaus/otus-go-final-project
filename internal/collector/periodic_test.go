@@ -21,6 +21,7 @@ func receive[T any](t *testing.T, ch <-chan T) T {
 		return v
 	}
 }
+
 func TestRunPeriodicErrorThenRecovery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -42,7 +43,8 @@ func TestRunPeriodicErrorThenRecovery(t *testing.T) {
 		t.Fatalf("first: %+v", first)
 	}
 	second := receive(t, out)
-	if second.Err != nil || second.Value != 7 || second.StartedAt.Location() != time.UTC || second.FinishedAt.Before(second.StartedAt) {
+	if second.Err != nil || second.Value != 7 || second.StartedAt.Location() != time.UTC ||
+		second.FinishedAt.Before(second.StartedAt) {
 		t.Fatalf("second: %+v", second)
 	}
 	cancel()
@@ -50,13 +52,18 @@ func TestRunPeriodicErrorThenRecovery(t *testing.T) {
 		t.Fatal("missing cancellation")
 	}
 }
+
 func TestRunPeriodicTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out := make(chan Sample[int])
 	done := make(chan error, 1)
 	go func() {
-		done <- RunPeriodic(ctx, sourceFunc(func(c context.Context) (int, error) { <-c.Done(); return 9, nil }), Options{time.Second, time.Millisecond}, out)
+		source := sourceFunc(func(c context.Context) (int, error) {
+			<-c.Done()
+			return 9, nil
+		})
+		done <- RunPeriodic(ctx, source, Options{time.Second, time.Millisecond}, out)
 	}()
 	if s := receive(t, out); !errors.Is(s.Err, context.DeadlineExceeded) || s.Value != 0 {
 		t.Fatalf("sample: %+v", s)
@@ -64,19 +71,27 @@ func TestRunPeriodicTimeout(t *testing.T) {
 	cancel()
 	receive(t, done)
 }
+
 func TestRunPeriodicBlockedOutputCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	called := make(chan struct{})
 	go func() {
-		done <- RunPeriodic(ctx, sourceFunc(func(context.Context) (int, error) { close(called); return 1, nil }), DefaultOptions(), make(chan Sample[int]))
+		source := sourceFunc(func(context.Context) (int, error) {
+			close(called)
+			return 1, nil
+		})
+		done <- RunPeriodic(ctx, source, DefaultOptions(), make(chan Sample[int]))
 	}()
 	receive(t, called)
 	cancel()
 	receive(t, done)
 }
+
 func TestRunPeriodicValidation(t *testing.T) {
-	src := sourceFunc(func(context.Context) (int, error) { t.Error("unexpected call"); return 0, nil })
+	src := sourceFunc(
+		func(context.Context) (int, error) { t.Error("unexpected call"); return 0, nil },
+	)
 	out := make(chan Sample[int])
 	for _, o := range []Options{{}, {time.Second, 0}, {0, time.Second}, {-1, time.Second}} {
 		if RunPeriodic(context.Background(), src, o, out) == nil {
@@ -92,6 +107,7 @@ func TestRunPeriodicValidation(t *testing.T) {
 		t.Fatal("missing cancellation")
 	}
 }
+
 func TestRunPeriodicNoOverlap(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -129,7 +145,11 @@ func TestRunPeriodicTimeoutPreservesSourceError(t *testing.T) {
 	out := make(chan Sample[int])
 	done := make(chan error, 1)
 	go func() {
-		done <- RunPeriodic(ctx, sourceFunc(func(c context.Context) (int, error) { <-c.Done(); return 1, sentinel }), Options{time.Second, time.Millisecond}, out)
+		source := sourceFunc(func(c context.Context) (int, error) {
+			<-c.Done()
+			return 1, sentinel
+		})
+		done <- RunPeriodic(ctx, source, Options{time.Second, time.Millisecond}, out)
 	}()
 	sample := receive(t, out)
 	cancel()

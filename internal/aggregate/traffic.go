@@ -1,6 +1,7 @@
 package aggregate
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"slices"
@@ -22,12 +23,14 @@ type TrafficHistoryOptions struct {
 // DefaultTrafficHistoryOptions provides bounded defaults for shared capture.
 func DefaultTrafficHistoryOptions() TrafficHistoryOptions { return TrafficHistoryOptions{65536, 4096} }
 
-type trafficSpan struct{ start, end time.Time }
-type trafficInterface struct {
-	active      bool
-	start, last time.Time
-	closed      []trafficSpan
-}
+type (
+	trafficSpan      struct{ start, end time.Time }
+	trafficInterface struct {
+		active      bool
+		start, last time.Time
+		closed      []trafficSpan
+	}
+)
 
 // TrafficHistory stores metadata only. Reads never consume another client's data.
 // Construct with NewTrafficHistory; all methods are safe for concurrent use.
@@ -44,11 +47,28 @@ type TrafficHistory struct {
 }
 
 // NewTrafficHistory fixes the selected interface set and all storage bounds.
-func NewTrafficHistory(maxWindowSeconds int, interfaces []string, options TrafficHistoryOptions) (*TrafficHistory, error) {
-	if maxWindowSeconds < 1 || maxWindowSeconds > 3600 || options.MaxPackets < 1 || options.MaxPackets > 1<<20 || options.MaxFlows < 1 || options.MaxFlows > 65536 || len(interfaces) < 1 || len(interfaces) > 8 {
+func NewTrafficHistory(
+	maxWindowSeconds int,
+	interfaces []string,
+	options TrafficHistoryOptions,
+) (*TrafficHistory, error) {
+	if maxWindowSeconds < 1 || maxWindowSeconds > 3600 || options.MaxPackets < 1 ||
+		options.MaxPackets > 1<<20 ||
+		options.MaxFlows < 1 ||
+		options.MaxFlows > 65536 ||
+		len(interfaces) < 1 ||
+		len(interfaces) > 8 {
 		return nil, fmt.Errorf("invalid traffic history limits or interfaces")
 	}
-	h := &TrafficHistory{packets: make([]metrics.TrafficPacket, options.MaxPackets), flows: make(map[metrics.FlowKey]int), maxFlows: options.MaxFlows, maxStates: 2*(maxWindowSeconds+2) + 4, window: time.Duration(maxWindowSeconds) * time.Second, retention: time.Duration(maxWindowSeconds+2) * time.Second, interfaces: make(map[string]*trafficInterface)}
+	h := &TrafficHistory{
+		packets:    make([]metrics.TrafficPacket, options.MaxPackets),
+		flows:      make(map[metrics.FlowKey]int),
+		maxFlows:   options.MaxFlows,
+		maxStates:  2*(maxWindowSeconds+2) + 4,
+		window:     time.Duration(maxWindowSeconds) * time.Second,
+		retention:  time.Duration(maxWindowSeconds+2) * time.Second,
+		interfaces: make(map[string]*trafficInterface),
+	}
 	for _, name := range interfaces {
 		if name == "" || len(name) > 64 || strings.ContainsAny(name, "/\x00\n\r") {
 			return nil, fmt.Errorf("invalid traffic interface")
@@ -60,6 +80,7 @@ func NewTrafficHistory(maxWindowSeconds int, interfaces []string, options Traffi
 	}
 	return h, nil
 }
+
 func (h *TrafficHistory) lossLocked(start, end time.Time) {
 	if h.loss.start.IsZero() || start.Before(h.loss.start) {
 		h.loss.start = start.UTC()
@@ -79,6 +100,7 @@ func (h *TrafficHistory) MarkLoss(start, end time.Time) error {
 	h.lossLocked(start, end)
 	return nil
 }
+
 func (h *TrafficHistory) release(p metrics.TrafficPacket) {
 	if p.FlowKnown {
 		h.flows[p.Flow]--
@@ -142,7 +164,8 @@ func (h *TrafficHistory) SetInterfaceState(name string, at time.Time, active boo
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	state, ok := h.interfaces[name]
-	if !ok || at.IsZero() || (!state.last.IsZero() && at.Before(state.last)) || (!h.watermark.IsZero() && at.Before(h.watermark.Add(-h.retention))) {
+	if !ok || at.IsZero() || (!state.last.IsZero() && at.Before(state.last)) ||
+		(!h.watermark.IsZero() && at.Before(h.watermark.Add(-h.retention))) {
 		return fmt.Errorf("unknown interface or stale traffic state")
 	}
 	at = at.UTC()
@@ -174,7 +197,19 @@ func (h *TrafficHistory) RecordPacket(packet metrics.TrafficPacket) error {
 		return fmt.Errorf("unknown traffic interface %q", packet.Interface)
 	}
 	source, dest := packet.Flow.Source, packet.Flow.Destination
-	if !ok || h.watermark.IsZero() || packet.At.IsZero() || packet.At.Before(h.watermark.Add(-h.retention)) || packet.At.After(h.watermark.Add(5*time.Second)) || !source.Address.IsValid() || !dest.Address.IsValid() || source.Address.Zone() != "" || dest.Address.Zone() != "" || source.Address.Is4() != dest.Address.Is4() || source.HasPort != dest.HasPort || packet.IPBytes < 20 || packet.IPBytes > 65575 || (source.Address.Is6() && packet.IPBytes < 40) || ((packet.Flow.Protocol == 6 || packet.Flow.Protocol == 17) && packet.FlowKnown && !source.HasPort) {
+	if !ok || h.watermark.IsZero() || packet.At.IsZero() ||
+		packet.At.Before(h.watermark.Add(-h.retention)) ||
+		packet.At.After(h.watermark.Add(5*time.Second)) ||
+		!source.Address.IsValid() ||
+		!dest.Address.IsValid() ||
+		source.Address.Zone() != "" ||
+		dest.Address.Zone() != "" ||
+		source.Address.Is4() != dest.Address.Is4() ||
+		source.HasPort != dest.HasPort ||
+		packet.IPBytes < 20 ||
+		packet.IPBytes > 65575 ||
+		(source.Address.Is6() && packet.IPBytes < 40) ||
+		((packet.Flow.Protocol == 6 || packet.Flow.Protocol == 17) && packet.FlowKnown && !source.HasPort) {
 		return fmt.Errorf("%w: invalid metadata or timestamp", metrics.ErrTrafficPacketRejected)
 	}
 	packet.At = packet.At.UTC()
@@ -204,6 +239,7 @@ func (h *TrafficHistory) RecordPacket(packet metrics.TrafficPacket) error {
 	h.size++
 	return nil
 }
+
 func spanIntersection(span trafficSpan, w Window) (trafficSpan, bool) {
 	if span.start.Before(w.Start) {
 		span.start = w.Start
@@ -213,6 +249,7 @@ func spanIntersection(span trafficSpan, w Window) (trafficSpan, bool) {
 	}
 	return span, span.start.Before(span.end)
 }
+
 func compareEndpoint(a, b metrics.Endpoint) int {
 	if c := strings.Compare(a.Address.String(), b.Address.String()); c != 0 {
 		return c
@@ -231,6 +268,7 @@ func compareEndpoint(a, b metrics.Endpoint) int {
 	}
 	return 0
 }
+
 func compareFlow(a, b metrics.FlowKey) int {
 	if c := compareEndpoint(a.Source, b.Source); c != 0 {
 		return c
@@ -244,6 +282,82 @@ func compareFlow(a, b metrics.FlowKey) int {
 type trafficEdge struct {
 	at    time.Time
 	delta int
+}
+
+func (h *TrafficHistory) collectTrafficBytes(
+	window Window,
+	available map[string][]trafficSpan,
+) ([256]uint64, map[metrics.FlowKey]uint64, uint64, bool, error) {
+	var protocols [256]uint64
+	flowBytes := make(map[metrics.FlowKey]uint64)
+	total := uint64(0)
+	partial := false
+	for i := 0; i < h.size; i++ {
+		p := h.packets[(h.head+i)%len(h.packets)]
+		if p.At.Before(window.Start) || !p.At.Before(window.End) || !p.At.Before(h.watermark) {
+			continue
+		}
+		spans := available[p.Interface]
+		index := sort.Search(len(spans), func(i int) bool { return spans[i].end.After(p.At) })
+		if index >= len(spans) || p.At.Before(spans[index].start) {
+			partial = true
+			continue
+		}
+		if total > math.MaxUint64-p.IPBytes || protocols[p.Flow.Protocol] > math.MaxUint64-p.IPBytes {
+			return protocols, nil, 0, false, fmt.Errorf("traffic byte overflow")
+		}
+		total += p.IPBytes
+		protocols[p.Flow.Protocol] += p.IPBytes
+		partial = partial || p.Partial
+		if p.FlowKnown {
+			if flowBytes[p.Flow] > math.MaxUint64-p.IPBytes {
+				return protocols, nil, 0, false, fmt.Errorf("flow byte overflow")
+			}
+			flowBytes[p.Flow] += p.IPBytes
+		}
+	}
+	return protocols, flowBytes, total, partial, nil
+}
+
+func buildTrafficData(
+	protocols [256]uint64,
+	flowBytes map[metrics.FlowKey]uint64,
+	total uint64,
+	covered time.Duration,
+	topK int,
+) metrics.Traffic {
+	data := metrics.Traffic{
+		Protocols: make([]metrics.ProtocolTraffic, 0),
+		Flows:     make([]metrics.FlowTraffic, 0),
+	}
+	for protocol, n := range protocols {
+		if n > 0 {
+			data.Protocols = append(data.Protocols, metrics.ProtocolTraffic{
+				Protocol: uint8(protocol), Bytes: n, Percent: float64(n) / float64(total) * 100,
+			})
+		}
+	}
+	slices.SortFunc(data.Protocols, func(a, b metrics.ProtocolTraffic) int {
+		if a.Bytes != b.Bytes {
+			return cmp.Compare(b.Bytes, a.Bytes)
+		}
+		return int(a.Protocol) - int(b.Protocol)
+	})
+	for flow, n := range flowBytes {
+		data.Flows = append(data.Flows, metrics.FlowTraffic{
+			Flow: flow, BytesPerSecond: float64(n) / covered.Seconds(),
+		})
+	}
+	slices.SortFunc(data.Flows, func(a, b metrics.FlowTraffic) int {
+		if a.BytesPerSecond != b.BytesPerSecond {
+			return cmp.Compare(b.BytesPerSecond, a.BytesPerSecond)
+		}
+		return compareFlow(a.Flow, b.Flow)
+	})
+	if len(data.Flows) > topK {
+		data.Flows = data.Flows[:topK]
+	}
+	return data
 }
 
 // Snapshot calculates exact packet-window counts and usable-time flow rates.
@@ -298,64 +412,17 @@ func (h *TrafficHistory) Snapshot(window Window, topK int) (Summary[metrics.Traf
 	if _, overlap := spanIntersection(h.loss, window); !h.loss.start.IsZero() && overlap {
 		partial = true
 	}
-	var protocols [256]uint64
-	flowBytes := make(map[metrics.FlowKey]uint64)
-	total := uint64(0)
-	for i := 0; i < h.size; i++ {
-		p := h.packets[(h.head+i)%len(h.packets)]
-		if p.At.Before(window.Start) || !p.At.Before(window.End) || !p.At.Before(h.watermark) {
-			continue
-		}
-		spans := available[p.Interface]
-		index := sort.Search(len(spans), func(i int) bool { return spans[i].end.After(p.At) })
-		usable := index < len(spans) && !p.At.Before(spans[index].start)
-		if !usable {
-			partial = true
-			continue
-		}
-		if total > math.MaxUint64-p.IPBytes || protocols[p.Flow.Protocol] > math.MaxUint64-p.IPBytes {
-			return Summary[metrics.Traffic]{}, fmt.Errorf("traffic byte overflow")
-		}
-		total += p.IPBytes
-		protocols[p.Flow.Protocol] += p.IPBytes
-		partial = partial || p.Partial
-		if p.FlowKnown {
-			if flowBytes[p.Flow] > math.MaxUint64-p.IPBytes {
-				return Summary[metrics.Traffic]{}, fmt.Errorf("flow byte overflow")
-			}
-			flowBytes[p.Flow] += p.IPBytes
-		}
+	protocols, flowBytes, total, packetPartial, err := h.collectTrafficBytes(window, available)
+	if err != nil {
+		return Summary[metrics.Traffic]{}, err
 	}
-	data := metrics.Traffic{Protocols: make([]metrics.ProtocolTraffic, 0), Flows: make([]metrics.FlowTraffic, 0)}
-	for protocol, n := range protocols {
-		if n > 0 {
-			data.Protocols = append(data.Protocols, metrics.ProtocolTraffic{Protocol: uint8(protocol), Bytes: n, Percent: float64(n) / float64(total) * 100})
-		}
-	}
-	slices.SortFunc(data.Protocols, func(a, b metrics.ProtocolTraffic) int {
-		if a.Bytes > b.Bytes {
-			return -1
-		}
-		if a.Bytes < b.Bytes {
-			return 1
-		}
-		return int(a.Protocol) - int(b.Protocol)
-	})
-	for flow, n := range flowBytes {
-		data.Flows = append(data.Flows, metrics.FlowTraffic{Flow: flow, BytesPerSecond: float64(n) / covered.Seconds()})
-	}
-	slices.SortFunc(data.Flows, func(a, b metrics.FlowTraffic) int {
-		if a.BytesPerSecond > b.BytesPerSecond {
-			return -1
-		}
-		if a.BytesPerSecond < b.BytesPerSecond {
-			return 1
-		}
-		return compareFlow(a.Flow, b.Flow)
-	})
-	if len(data.Flows) > topK {
-		data.Flows = data.Flows[:topK]
-	}
+	partial = partial || packetPartial
+	data := buildTrafficData(protocols, flowBytes, total, covered, topK)
 	timestamp := last.UTC()
-	return Summary[metrics.Traffic]{Data: &data, CoverageRatio: float64(covered) / float64(window.End.Sub(window.Start)), LastSampleAt: &timestamp, Partial: partial}, nil
+	return Summary[metrics.Traffic]{
+		Data:          &data,
+		CoverageRatio: float64(covered) / float64(window.End.Sub(window.Start)),
+		LastSampleAt:  &timestamp,
+		Partial:       partial,
+	}, nil
 }

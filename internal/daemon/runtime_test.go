@@ -21,10 +21,15 @@ func TestRuntimeCollectsWithoutSubscribers(t *testing.T) {
 	cfg := config.Default()
 	cfg.Subsystems = config.Subsystems{LoadAverage: true, CPU: true}
 	var calls atomic.Int32
-	src := sources{load: sourceFunc[metrics.LoadAverage](func(context.Context) (metrics.LoadAverage, error) {
-		calls.Add(1)
-		return metrics.LoadAverage{Load1: 7}, nil
-	}), cpu: sourceFunc[metrics.CPUCounters](func(context.Context) (metrics.CPUCounters, error) { return metrics.CPUCounters{}, errors.New("denied") })}
+	src := sources{
+		load: sourceFunc[metrics.LoadAverage](func(context.Context) (metrics.LoadAverage, error) {
+			calls.Add(1)
+			return metrics.LoadAverage{Load1: 7}, nil
+		}),
+		cpu: sourceFunc[metrics.CPUCounters](
+			func(context.Context) (metrics.CPUCounters, error) { return metrics.CPUCounters{}, errors.New("denied") },
+		),
+	}
 	r, err := newRuntime(cfg, src, time.Now)
 	if err != nil {
 		t.Fatal(err)
@@ -58,26 +63,40 @@ func TestRuntimeCollectsWithoutSubscribers(t *testing.T) {
 		t.Fatal("workers did not stop")
 	}
 }
+
 func TestDisabledRuntimeDoesNotStartSources(t *testing.T) {
 	cfg := config.Default()
 	cfg.Subsystems = config.Subsystems{}
-	r, _ := newRuntime(cfg, sources{load: sourceFunc[metrics.LoadAverage](func(context.Context) (metrics.LoadAverage, error) {
-		t.Error("disabled source called")
-		return metrics.LoadAverage{}, nil
-	})}, time.Now)
+	r, _ := newRuntime(
+		cfg,
+		sources{
+			load: sourceFunc[metrics.LoadAverage](
+				func(context.Context) (metrics.LoadAverage, error) {
+					t.Error("disabled source called")
+					return metrics.LoadAverage{}, nil
+				},
+			),
+		},
+		time.Now,
+	)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()
 	cancel()
 	<-done
 }
+
 func TestTrafficCheckpointCoalescesStaleHeartbeat(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxWindowSeconds = 10
 	s, _ := NewStore(cfg)
 	at := time.Unix(100, 0).UTC()
 	s.now = func() time.Time { return at.Add(2 * time.Second) }
-	s.traffic, _ = aggregate.NewTrafficHistory(10, []string{"eth0"}, aggregate.DefaultTrafficHistoryOptions())
+	s.traffic, _ = aggregate.NewTrafficHistory(
+		10,
+		[]string{"eth0"},
+		aggregate.DefaultTrafficHistoryOptions(),
+	)
 	sink := trafficSink{s}
 	if err := sink.SetInterfaceState("eth0", at, true); err != nil {
 		t.Fatal(err)
@@ -86,7 +105,10 @@ func TestTrafficCheckpointCoalescesStaleHeartbeat(t *testing.T) {
 	if err := sink.Advance(at.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.Snapshot(context.Background(), aggregate.Window{Start: at, End: at.Add(2 * time.Second)})
+	got, err := s.Snapshot(
+		context.Background(),
+		aggregate.Window{Start: at, End: at.Add(2 * time.Second)},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,17 +126,25 @@ func TestProductionDisabledSourcesAreNotConstructed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.sources.load != nil || r.sources.cpu != nil || r.sources.disk != nil || r.sources.filesystems != nil || r.sources.connections != nil || r.sources.traffic != nil {
+	if r.sources.load != nil || r.sources.cpu != nil || r.sources.disk != nil ||
+		r.sources.filesystems != nil ||
+		r.sources.connections != nil ||
+		r.sources.traffic != nil {
 		t.Fatal("disabled sources constructed")
 	}
 }
+
 func TestConcurrentTrafficCallbacksAndSnapshots(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxWindowSeconds = 10
 	s, _ := NewStore(cfg)
 	at := time.Unix(100, 0).UTC()
 	s.now = func() time.Time { return at.Add(2 * time.Second) }
-	s.traffic, _ = aggregate.NewTrafficHistory(10, []string{"eth0"}, aggregate.DefaultTrafficHistoryOptions())
+	s.traffic, _ = aggregate.NewTrafficHistory(
+		10,
+		[]string{"eth0"},
+		aggregate.DefaultTrafficHistoryOptions(),
+	)
 	sink := trafficSink{s}
 	sink.SetInterfaceState("eth0", at, true)
 	var group sync.WaitGroup
@@ -130,7 +160,10 @@ func TestConcurrentTrafficCallbacksAndSnapshots(t *testing.T) {
 	go func() {
 		defer group.Done()
 		for i := 0; i < 100; i++ {
-			got, err := s.Snapshot(context.Background(), aggregate.Window{Start: at, End: at.Add(2 * time.Second)})
+			got, err := s.Snapshot(
+				context.Background(),
+				aggregate.Window{Start: at, End: at.Add(2 * time.Second)},
+			)
 			if err != nil {
 				t.Error(err)
 			} else if got.Traffic.Summary.CoverageRatio != 1 {

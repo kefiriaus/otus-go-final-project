@@ -12,6 +12,11 @@ import (
 	"github.com/kefiriaus/otus-go-final-project/internal/config"
 )
 
+const (
+	portFlag   = "-port"
+	configFlag = "-config"
+)
+
 func configFile(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -20,6 +25,7 @@ func configFile(t *testing.T, content string) string {
 	}
 	return path
 }
+
 func TestRun(t *testing.T) {
 	valid := configFile(t, `{"subsystems":{"cpu":false}}`)
 	invalid := configFile(t, `{`)
@@ -31,22 +37,25 @@ func TestRun(t *testing.T) {
 		out, err string
 	}{
 		{"defaults", nil, 0, "", ""},
-		{"short help", []string{"-h"}, 0, "-port", ""},
-		{"long help", []string{"-help"}, 0, "-config", ""},
-		{"help skips file", []string{"-config", missing, "-h"}, 0, "Usage", ""},
+		{"short help", []string{"-h"}, 0, portFlag, ""},
+		{"long help", []string{"-help"}, 0, configFlag, ""},
+		{"help skips file", []string{configFlag, missing, "-h"}, 0, "Usage", ""},
 		{"unknown flag", []string{"-unknown"}, 2, "", "flag provided but not defined"},
 		{"positional", []string{"extra"}, 2, "", "unexpected positional"},
-		{"port type", []string{"-port", "abc"}, 2, "", "invalid value"},
-		{"port zero", []string{"-port", "0"}, 2, "", "port"},
-		{"port high", []string{"-port", "65536"}, 2, "", "port"},
+		{"port type", []string{portFlag, "abc"}, 2, "", "invalid value"},
+		{"port zero", []string{portFlag, "0"}, 2, "", "port"},
+		{"port high", []string{portFlag, "65536"}, 2, "", "port"},
 		{"empty config", []string{"-config="}, 2, "", "config path"},
-		{"invalid file", []string{"-config", invalid}, 2, "", invalid},
-		{"missing file", []string{"-config", missing}, 2, "", missing},
-		{"valid file", []string{"-port", "12345", "-config", valid}, 0, "", ""},
+		{"invalid file", []string{configFlag, invalid}, 2, "", invalid},
+		{"missing file", []string{configFlag, missing}, 2, "", missing},
+		{"valid file", []string{portFlag, "12345", configFlag, valid}, 0, "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := runContext(context.Background(), tt.args, &stdout, &stderr, func(context.Context, config.Config) error { return nil })
+			code := runContext(
+				context.Background(), tt.args, &stdout, &stderr,
+				func(context.Context, config.Config) error { return nil },
+			)
 			if code != tt.code {
 				t.Fatalf("exit=%d want=%d stderr=%q", code, tt.code, stderr.String())
 			}
@@ -70,9 +79,13 @@ func TestRun(t *testing.T) {
 		})
 	}
 }
+
 func TestParseArgsConfig(t *testing.T) {
 	file := configFile(t, `{"max_window_seconds":60,"subsystems":{"cpu":false}}`)
-	got, err := parseArgs([]string{"-config", file, "-port", "1000", "-port", "12345"}, io.Discard)
+	got, err := parseArgs(
+		[]string{configFlag, file, portFlag, "1000", portFlag, "12345"},
+		io.Discard,
+	)
 	want := config.Default()
 	want.Port = 12345
 	want.MaxWindowSeconds = 60
@@ -85,11 +98,11 @@ func TestParseArgsConfig(t *testing.T) {
 		t.Fatalf("state leaked: %+v %v", got, err)
 	}
 	for _, port := range []string{"1", "65535"} {
-		if _, err := parseArgs([]string{"-port", port}, io.Discard); err != nil {
+		if _, err := parseArgs([]string{portFlag, port}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, args := range [][]string{{"-port", "1", "-unknown"}, {"-port", "1", "extra"}} {
+	for _, args := range [][]string{{portFlag, "1", "-unknown"}, {portFlag, "1", "extra"}} {
 		got, err := parseArgs(args, io.Discard)
 		if err == nil || got != (config.Config{}) {
 			t.Fatalf("got %+v %v for %v", got, err, args)

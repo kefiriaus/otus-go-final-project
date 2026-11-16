@@ -10,7 +10,85 @@ import (
 	"github.com/kefiriaus/otus-go-final-project/internal/metrics"
 )
 
-func (s *ConnectionsSource) lookupOwners(parent context.Context, inodes []uint64) (map[uint64][]metrics.ProcessOwner, connectionIssues) {
+func (s *ConnectionsSource) scanProcessFDs(
+	ctx context.Context,
+	pid uint32,
+	owners map[uint64][]metrics.ProcessOwner,
+	limit int,
+	issues *connectionIssues,
+) (map[uint64]bool, int) {
+	matched := make(map[uint64]bool)
+	base := strconv.FormatUint(uint64(pid), 10)
+	directory, err := s.procFS.Open(base + "/fd")
+	if err != nil {
+		issues.add(fmt.Errorf("open process FD directory %s: %w", base, err))
+		return matched, 0
+	}
+	fds, scanned, err := s.numericEntries(ctx, directory, base+"/fd", limit, limit, true)
+	issues.add(err)
+	for _, fd := range fds {
+		if ctx.Err() != nil {
+			issues.add(ctx.Err())
+			break
+		}
+		name := base + "/fd/" + strconv.FormatUint(uint64(fd), 10)
+		target, err := fs.ReadLink(s.procFS, name)
+		if err != nil {
+			issues.add(fmt.Errorf("process FD link %s: %w", name, err))
+			continue
+		}
+		if len(target) > 4096 {
+			issues.add(fmt.Errorf("process FD link exceeds byte limit"))
+			continue
+		}
+		inode, socket, err := parseSocketInode(target)
+		if err != nil {
+			issues.add(err)
+			continue
+		}
+		if socket {
+			if _, wanted := owners[inode]; wanted {
+				matched[inode] = true
+			}
+		}
+	}
+	issues.add(directory.Close())
+	return matched, scanned
+}
+
+func (s *ConnectionsSource) processOwner(
+	ctx context.Context,
+	pid uint32,
+	issues *connectionIssues,
+) metrics.ProcessOwner {
+	base := strconv.FormatUint(uint64(pid), 10)
+	knownPID := pid
+	owner := metrics.ProcessOwner{PID: &knownPID}
+	command, err := s.readFile(ctx, base+"/comm", 256)
+	if err == nil {
+		var value string
+		value, err = parseProcessComm(command)
+		if err == nil {
+			owner.Command = &value
+		}
+	}
+	issues.add(err)
+	status, err := s.readFile(ctx, base+"/status", 65536)
+	if err == nil {
+		var value string
+		value, err = parseEffectiveUID(status)
+		if err == nil {
+			owner.User = &value
+		}
+	}
+	issues.add(err)
+	return owner
+}
+
+func (s *ConnectionsSource) lookupOwners(
+	parent context.Context,
+	inodes []uint64,
+) (map[uint64][]metrics.ProcessOwner, connectionIssues) {
 	owners := make(map[uint64][]metrics.ProcessOwner, len(inodes))
 	var issues connectionIssues
 	if len(inodes) == 0 {
@@ -27,7 +105,13 @@ func (s *ConnectionsSource) lookupOwners(parent context.Context, inodes []uint64
 	}
 	ctx, cancel := context.WithDeadline(parent, deadline)
 	defer cancel()
-	pids, _, err := s.numericDirectory(ctx, ".", s.options.MaxProcesses, 2*s.options.MaxProcesses+512, false)
+	pids, _, err := s.numericDirectory(
+		ctx,
+		".",
+		s.options.MaxProcesses,
+		2*s.options.MaxProcesses+512,
+		false,
+	)
 	issues.add(err)
 	totalFDs := 0
 	for _, pid := range pids {
@@ -39,68 +123,13 @@ func (s *ConnectionsSource) lookupOwners(parent context.Context, inodes []uint64
 			issues.add(fmt.Errorf("total process FD scan limit"))
 			break
 		}
-		base := strconv.FormatUint(uint64(pid), 10)
 		limit := min(s.options.MaxFDsPerProcess, s.options.MaxFDs-totalFDs)
-		directory, err := s.procFS.Open(base + "/fd")
-		if err != nil {
-			issues.add(fmt.Errorf("open process FD directory %s: %w", base, err))
-			continue
-		}
-		fds, scanned, err := s.numericEntries(ctx, directory, base+"/fd", limit, limit, true)
+		matched, scanned := s.scanProcessFDs(ctx, pid, owners, limit, &issues)
 		totalFDs += scanned
-		issues.add(err)
-		matched := make(map[uint64]bool)
-		for _, fd := range fds {
-			if ctx.Err() != nil {
-				issues.add(ctx.Err())
-				break
-			}
-			name := base + "/fd/" + strconv.FormatUint(uint64(fd), 10)
-			target, err := fs.ReadLink(s.procFS, name)
-			if err != nil {
-				issues.add(fmt.Errorf("process FD link %s: %w", name, err))
-				continue
-			}
-			if len(target) > 4096 {
-				issues.add(fmt.Errorf("process FD link exceeds byte limit"))
-				continue
-			}
-			inode, socket, err := parseSocketInode(target)
-			if err != nil {
-				issues.add(err)
-				continue
-			}
-			if !socket {
-				continue
-			}
-			if _, wanted := owners[inode]; wanted {
-				matched[inode] = true
-			}
-		}
-		issues.add(directory.Close())
 		if len(matched) == 0 {
 			continue
 		}
-		knownPID := pid
-		owner := metrics.ProcessOwner{PID: &knownPID}
-		command, err := s.readFile(ctx, base+"/comm", 256)
-		if err == nil {
-			var value string
-			value, err = parseProcessComm(command)
-			if err == nil {
-				owner.Command = &value
-			}
-		}
-		issues.add(err)
-		status, err := s.readFile(ctx, base+"/status", 65536)
-		if err == nil {
-			var value string
-			value, err = parseEffectiveUID(status)
-			if err == nil {
-				owner.User = &value
-			}
-		}
-		issues.add(err)
+		owner := s.processOwner(ctx, pid, &issues)
 		for inode := range matched {
 			if len(owners[inode]) >= s.options.MaxOwnersPerSocket {
 				issues.add(fmt.Errorf("socket %d owner limit", inode))

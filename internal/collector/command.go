@@ -45,12 +45,19 @@ func (w *limitedOutput) Write(p []byte) (int, error) {
 }
 
 // Run waits for the command and bounds output retained from each stream.
-func (r CommandRunner) Run(ctx context.Context, name string, args ...string) (CommandOutput, error) {
+func (r CommandRunner) Run(
+	ctx context.Context,
+	name string,
+	args ...string,
+) (CommandOutput, error) {
 	if r.Timeout <= 0 || r.MaxOutputBytes <= 0 || name == "" {
-		return CommandOutput{}, fmt.Errorf("command requires a name, positive timeout and output limit")
+		return CommandOutput{}, fmt.Errorf(
+			"command requires a name, positive timeout and output limit",
+		)
 	}
 	attempt, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
+	// #nosec G702 -- CommandRunner intentionally executes a caller-selected binary without a shell.
 	cmd := exec.CommandContext(attempt, name, args...)
 	cmd.WaitDelay = 100 * time.Millisecond
 	stdout := limitedOutput{limit: r.MaxOutputBytes}

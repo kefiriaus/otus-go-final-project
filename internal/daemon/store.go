@@ -37,7 +37,22 @@ func NewStore(cfg config.Config) (*Store, error) {
 	dh, _ := aggregate.NewGaugeSeries[bool](cfg.MaxWindowSeconds)
 	mh, _ := aggregate.NewGaugeSeries[bool](cfg.MaxWindowSeconds)
 	ch, _ := aggregate.NewGaugeSeries[metrics.Connections](cfg.MaxWindowSeconds)
-	return &Store{cfg: cfg, now: time.Now, load: load, cpu: cpu, disks: make(map[string]*diskEntry), mounts: make(map[string]*mountEntry), diskHealth: dh, mountHealth: mh, connections: connectionHistory{series: ch, limit: 32 << 20, maxEntries: cfg.MaxWindowSeconds + 2, retention: time.Duration(cfg.MaxWindowSeconds+2) * time.Second}}, nil
+	return &Store{
+		cfg:         cfg,
+		now:         time.Now,
+		load:        load,
+		cpu:         cpu,
+		disks:       make(map[string]*diskEntry),
+		mounts:      make(map[string]*mountEntry),
+		diskHealth:  dh,
+		mountHealth: mh,
+		connections: connectionHistory{
+			series:     ch,
+			limit:      32 << 20,
+			maxEntries: cfg.MaxWindowSeconds + 2,
+			retention:  time.Duration(cfg.MaxWindowSeconds+2) * time.Second,
+		},
+	}, nil
 }
 
 func detail(err error) string {
@@ -50,18 +65,29 @@ func detail(err error) string {
 	}
 	return s
 }
+
 func (s *Store) addLoad(v collector.Sample[metrics.LoadAverage]) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.details[0] = detail(v.Err)
-	return s.load.Add(aggregate.Event[metrics.LoadAverage]{At: v.FinishedAt, Value: v.Value, Err: v.Err})
+	return s.load.Add(
+		aggregate.Event[metrics.LoadAverage]{At: v.FinishedAt, Value: v.Value, Err: v.Err},
+	)
 }
+
 func (s *Store) addCPU(v collector.Sample[metrics.CPUCounters]) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.details[1] = detail(v.Err)
-	return s.cpu.Add(aggregate.Event[aggregate.CounterPoint]{At: v.FinishedAt, Value: aggregate.CPUCounterPoint(v.Value), Err: v.Err})
+	return s.cpu.Add(
+		aggregate.Event[aggregate.CounterPoint]{
+			At:    v.FinishedAt,
+			Value: aggregate.CPUCounterPoint(v.Value),
+			Err:   v.Err,
+		},
+	)
 }
+
 func (s *Store) addConnections(v collector.Sample[metrics.ConnectionsObservation]) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -82,10 +108,35 @@ func (s *Store) Snapshot(ctx context.Context, w aggregate.Window) (Snapshot, err
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
-	if w.Start.IsZero() || !w.End.After(w.Start) || w.End.Sub(w.Start) > time.Duration(s.cfg.MaxWindowSeconds)*time.Second {
+	if w.Start.IsZero() || !w.End.After(w.Start) ||
+		w.End.Sub(w.Start) > time.Duration(s.cfg.MaxWindowSeconds)*time.Second {
 		return Snapshot{}, fmt.Errorf("invalid snapshot window")
 	}
-	out := Snapshot{Window: w, GeneratedAt: s.now().UTC(), LoadAverage: Section[metrics.LoadAverage]{Enabled: s.cfg.Subsystems.LoadAverage, Detail: s.details[0]}, CPU: Section[metrics.CPUUsage]{Enabled: s.cfg.Subsystems.CPU, Detail: s.details[1]}, DiskIO: Section[[]metrics.DiskIO]{Enabled: s.cfg.Subsystems.DiskIO, Detail: s.details[2]}, Filesystems: Section[[]metrics.FilesystemUsage]{Enabled: s.cfg.Subsystems.Filesystems, Detail: s.details[3]}, Traffic: Section[metrics.Traffic]{Enabled: s.cfg.Subsystems.Traffic, Detail: s.details[4]}, Connections: Section[metrics.Connections]{Enabled: s.cfg.Subsystems.Connections, Detail: s.details[5]}}
+	out := Snapshot{
+		Window:      w,
+		GeneratedAt: s.now().UTC(),
+		LoadAverage: Section[metrics.LoadAverage]{
+			Enabled: s.cfg.Subsystems.LoadAverage,
+			Detail:  s.details[0],
+		},
+		CPU: Section[metrics.CPUUsage]{Enabled: s.cfg.Subsystems.CPU, Detail: s.details[1]},
+		DiskIO: Section[[]metrics.DiskIO]{
+			Enabled: s.cfg.Subsystems.DiskIO,
+			Detail:  s.details[2],
+		},
+		Filesystems: Section[[]metrics.FilesystemUsage]{
+			Enabled: s.cfg.Subsystems.Filesystems,
+			Detail:  s.details[3],
+		},
+		Traffic: Section[metrics.Traffic]{
+			Enabled: s.cfg.Subsystems.Traffic,
+			Detail:  s.details[4],
+		},
+		Connections: Section[metrics.Connections]{
+			Enabled: s.cfg.Subsystems.Connections,
+			Detail:  s.details[5],
+		},
+	}
 	var err error
 	if out.LoadAverage.Enabled {
 		v, e := s.load.Read(w)

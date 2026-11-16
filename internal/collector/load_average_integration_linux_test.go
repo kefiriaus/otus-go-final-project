@@ -29,14 +29,25 @@ func TestLoadAverageHistoryIntegration(t *testing.T) {
 			fixtures["loadavg"] = &fstest.MapFile{Data: []byte(input)}
 		}
 		value, err := source.Collect(context.Background())
-		sample := Sample[metrics.LoadAverage]{StartedAt: base.Add(time.Duration(i) * time.Second), FinishedAt: base.Add(time.Duration(i) * time.Second), Value: value, Err: err}
+		sample := Sample[metrics.LoadAverage]{
+			StartedAt:  base.Add(time.Duration(i) * time.Second),
+			FinishedAt: base.Add(time.Duration(i) * time.Second),
+			Value:      value,
+			Err:        err,
+		}
 		if i == 2 && !errors.Is(err, fs.ErrNotExist) {
 			t.Fatalf("expected missing read: %v", err)
 		}
 		if i != 2 && err != nil {
 			t.Fatal(err)
 		}
-		if err := series.Add(aggregate.Event[metrics.LoadAverage]{At: sample.FinishedAt, Value: sample.Value, Err: sample.Err}); err != nil {
+		if err := series.Add(
+			aggregate.Event[metrics.LoadAverage]{
+				At:    sample.FinishedAt,
+				Value: sample.Value,
+				Err:   sample.Err,
+			},
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -60,11 +71,13 @@ func TestLoadAverageHistoryIntegration(t *testing.T) {
 		}
 		again, _ := series.Read(window)
 		repeated, err := aggregate.MeanLoadAverage(window, again)
-		if err != nil || repeated.Data == nil || *repeated.Data != *got.Data || !repeated.LastSampleAt.Equal(*got.LastSampleAt) {
+		if err != nil || repeated.Data == nil || *repeated.Data != *got.Data ||
+			!repeated.LastSampleAt.Equal(*got.LastSampleAt) {
 			t.Fatal("read consumed history")
 		}
 	}
 }
+
 func TestLoadAverageRealLinux(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

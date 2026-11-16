@@ -45,7 +45,18 @@ type ConnectionsSource struct {
 
 // NewConnectionsSource validates work limits without opening sockets or files.
 func NewConnectionsSource(o ConnectionsOptions) (*ConnectionsSource, error) {
-	if o.MaxSocketRows < 1 || o.MaxSocketRows > 262144 || o.MaxListeningSockets < 1 || o.MaxListeningSockets > 4096 || o.MaxProcesses < 1 || o.MaxProcesses > 8192 || o.MaxFDs < 1 || o.MaxFDs > 131072 || o.MaxFDsPerProcess < 1 || o.MaxFDsPerProcess > 8192 || o.MaxOwnersPerSocket < 1 || o.MaxOwnersPerSocket > 32 || o.OwnerTimeout <= 0 || o.OwnerTimeout > time.Second {
+	if o.MaxSocketRows < 1 || o.MaxSocketRows > 262144 || o.MaxListeningSockets < 1 ||
+		o.MaxListeningSockets > 4096 ||
+		o.MaxProcesses < 1 ||
+		o.MaxProcesses > 8192 ||
+		o.MaxFDs < 1 ||
+		o.MaxFDs > 131072 ||
+		o.MaxFDsPerProcess < 1 ||
+		o.MaxFDsPerProcess > 8192 ||
+		o.MaxOwnersPerSocket < 1 ||
+		o.MaxOwnersPerSocket > 32 ||
+		o.OwnerTimeout <= 0 ||
+		o.OwnerTimeout > time.Second {
 		return nil, fmt.Errorf("invalid connections work limits")
 	}
 	return &ConnectionsSource{procFS: os.DirFS("/proc"), options: o}, nil
@@ -77,6 +88,7 @@ func (i *connectionIssues) add(err error) {
 	}
 	i.detail += text
 }
+
 func (s *ConnectionsSource) readFile(ctx context.Context, name string, limit int) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -97,7 +109,12 @@ func (s *ConnectionsSource) readFile(ctx context.Context, name string, limit int
 
 // numericDirectory reads bounded batches, retaining entries found before a limit
 // or read error. One extra entry detects overflow; nonnumeric entries also count.
-func (s *ConnectionsSource) numericDirectory(ctx context.Context, name string, maxNumbers, maxEntries int, allowZero bool) (numbers []uint32, scanned int, result error) {
+func (s *ConnectionsSource) numericDirectory(
+	ctx context.Context,
+	name string,
+	maxNumbers, maxEntries int,
+	allowZero bool,
+) (numbers []uint32, scanned int, result error) {
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
@@ -109,7 +126,35 @@ func (s *ConnectionsSource) numericDirectory(ctx context.Context, name string, m
 	return s.numericEntries(ctx, file, name, maxNumbers, maxEntries, allowZero)
 }
 
-func (s *ConnectionsSource) numericEntries(ctx context.Context, file fs.File, name string, maxNumbers, maxEntries int, allowZero bool) (numbers []uint32, scanned int, result error) {
+func numericProcEntry(value string, allowZero bool) (uint32, bool, error) {
+	if value == "" {
+		return 0, true, nil
+	}
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return 0, true, nil
+		}
+	}
+	if len(value) > 10 {
+		return 0, false, fmt.Errorf("oversized numeric proc entry")
+	}
+	number, err := strconv.ParseUint(value, 10, 32)
+	if err != nil {
+		return 0, false, fmt.Errorf("numeric proc entry: %w", err)
+	}
+	if number == 0 && !allowZero {
+		return 0, true, nil
+	}
+	return uint32(number), false, nil
+}
+
+func (s *ConnectionsSource) numericEntries(
+	ctx context.Context,
+	file fs.File,
+	name string,
+	maxNumbers, maxEntries int,
+	allowZero bool,
+) (numbers []uint32, scanned int, result error) {
 	defer func() { slices.Sort(numbers); numbers = slices.Compact(numbers) }()
 	dir, ok := file.(fs.ReadDirFile)
 	if !ok {
@@ -125,33 +170,19 @@ func (s *ConnectionsSource) numericEntries(ctx context.Context, file fs.File, na
 			if scanned > maxEntries {
 				return numbers, scanned, fmt.Errorf("proc %s entry scan limit", name)
 			}
-			value := entry.Name()
-			digits := value != ""
-			for _, ch := range value {
-				if ch < '0' || ch > '9' {
-					digits = false
-					break
-				}
-			}
-			if !digits {
-				continue
-			}
-			if len(value) > 10 {
-				return numbers, scanned, fmt.Errorf("oversized numeric proc entry")
-			}
-			number, err := strconv.ParseUint(value, 10, 32)
+			number, skip, err := numericProcEntry(entry.Name(), allowZero)
 			if err != nil {
-				return numbers, scanned, fmt.Errorf("numeric proc entry: %w", err)
+				return numbers, scanned, err
 			}
-			if number == 0 && !allowZero {
+			if skip {
 				continue
 			}
 			if len(numbers) >= maxNumbers {
 				return numbers, scanned, fmt.Errorf("proc %s numeric entry limit", name)
 			}
-			numbers = append(numbers, uint32(number))
+			numbers = append(numbers, number)
 		}
-		if readErr == io.EOF {
+		if errors.Is(readErr, io.EOF) {
 			return numbers, scanned, nil
 		}
 		if readErr != nil {
@@ -170,13 +201,7 @@ type socketTableResult struct {
 	err  error
 }
 
-// Collect reads four tables concurrently and enriches retained socket owners.
-// Ownership limits/failures preserve data as partial; parent cancellation does
-// not. Procfs reads and process metadata are best-effort, not an atomic snapshot.
-func (s *ConnectionsSource) Collect(ctx context.Context) (metrics.ConnectionsObservation, error) {
-	if err := ctx.Err(); err != nil {
-		return metrics.ConnectionsObservation{}, err
-	}
+func (s *ConnectionsSource) readSocketTables(ctx context.Context) [4]socketTableResult {
 	tables := [4]struct {
 		name     string
 		protocol uint8
@@ -190,7 +215,9 @@ func (s *ConnectionsSource) Collect(ctx context.Context) (metrics.ConnectionsObs
 			defer workers.Done()
 			data, err := s.readFile(ctx, "self/net/"+table.name, maxSocketTableBytes)
 			if err == nil {
-				results[i].rows, err = parseSocketTable(data, table.protocol, table.ipv6, binary.NativeEndian, s.options.MaxSocketRows)
+				results[i].rows, err = parseSocketTable(
+					data, table.protocol, table.ipv6, binary.NativeEndian, s.options.MaxSocketRows,
+				)
 			}
 			if err != nil {
 				results[i].err = fmt.Errorf("socket table %s: %w", table.name, err)
@@ -198,6 +225,43 @@ func (s *ConnectionsSource) Collect(ctx context.Context) (metrics.ConnectionsObs
 		}()
 	}
 	workers.Wait()
+	return results
+}
+
+func summarizeSocketRows(results [4]socketTableResult) (map[string]uint64, []socketRow, connectionIssues) {
+	states := make(map[string]uint64)
+	seen := make(map[uint64]bool)
+	var candidates []socketRow
+	var issues connectionIssues
+	for _, result := range results {
+		for _, row := range result.rows {
+			if row.Inode > 0 {
+				if seen[row.Inode] {
+					issues.add(fmt.Errorf("duplicate socket inode %d", row.Inode))
+					continue
+				}
+				seen[row.Inode] = true
+			}
+			if row.Protocol == 6 {
+				states[tcpStateName(row.StateCode)]++
+			}
+			if row.Protocol == 6 && row.StateCode == 10 ||
+				row.Protocol == 17 && row.Local.Port != 0 {
+				candidates = append(candidates, row)
+			}
+		}
+	}
+	return states, candidates, issues
+}
+
+// Collect reads four tables concurrently and enriches retained socket owners.
+// Ownership limits/failures preserve data as partial; parent cancellation does
+// not. Procfs reads and process metadata are best-effort, not an atomic snapshot.
+func (s *ConnectionsSource) Collect(ctx context.Context) (metrics.ConnectionsObservation, error) {
+	if err := ctx.Err(); err != nil {
+		return metrics.ConnectionsObservation{}, err
+	}
+	results := s.readSocketTables(ctx)
 	if err := ctx.Err(); err != nil {
 		return metrics.ConnectionsObservation{}, err
 	}
@@ -217,30 +281,17 @@ func (s *ConnectionsSource) Collect(ctx context.Context) (metrics.ConnectionsObs
 		}
 	}
 	if valid == 0 {
-		return metrics.ConnectionsObservation{}, fmt.Errorf("no usable socket tables: %w", errors.Join(failures...))
+		return metrics.ConnectionsObservation{}, fmt.Errorf(
+			"no usable socket tables: %w",
+			errors.Join(failures...),
+		)
 	}
 	if total > s.options.MaxSocketRows {
 		return metrics.ConnectionsObservation{}, errSocketRowLimit
 	}
-	states := make(map[string]uint64)
-	seen := make(map[uint64]bool)
-	var candidates []socketRow
-	for _, result := range results {
-		for _, row := range result.rows {
-			if row.Inode > 0 {
-				if seen[row.Inode] {
-					issues.add(fmt.Errorf("duplicate socket inode %d", row.Inode))
-					continue
-				}
-				seen[row.Inode] = true
-			}
-			if row.Protocol == 6 {
-				states[tcpStateName(row.StateCode)]++
-			}
-			if row.Protocol == 6 && row.StateCode == 10 || row.Protocol == 17 && row.Local.Port != 0 {
-				candidates = append(candidates, row)
-			}
-		}
+	states, candidates, rowIssues := summarizeSocketRows(results)
+	if rowIssues.partial {
+		issues.add(errors.New(rowIssues.detail))
 	}
 	slices.SortFunc(candidates, func(a, b socketRow) int {
 		if c := strings.Compare(a.Local.Address.String(), b.Local.Address.String()); c != 0 {
@@ -277,13 +328,30 @@ func (s *ConnectionsSource) Collect(ctx context.Context) (metrics.ConnectionsObs
 	if err := ctx.Err(); err != nil {
 		return metrics.ConnectionsObservation{}, err
 	}
-	data := metrics.Connections{ListeningSockets: make([]metrics.ListeningSocket, 0, len(candidates)), TCPStates: make([]metrics.TCPStateCount, 0, len(states))}
+	data := metrics.Connections{
+		ListeningSockets: make([]metrics.ListeningSocket, 0, len(candidates)),
+		TCPStates:        make([]metrics.TCPStateCount, 0, len(states)),
+	}
 	for _, row := range candidates {
-		data.ListeningSockets = append(data.ListeningSockets, metrics.ListeningSocket{Local: row.Local, Protocol: row.Protocol, Owners: slices.Clone(owners[row.Inode])})
+		data.ListeningSockets = append(
+			data.ListeningSockets,
+			metrics.ListeningSocket{
+				Local:    row.Local,
+				Protocol: row.Protocol,
+				Owners:   slices.Clone(owners[row.Inode]),
+			},
+		)
 	}
 	for name, count := range states {
 		data.TCPStates = append(data.TCPStates, metrics.TCPStateCount{State: name, Count: count})
 	}
-	slices.SortFunc(data.TCPStates, func(a, b metrics.TCPStateCount) int { return strings.Compare(a.State, b.State) })
-	return metrics.ConnectionsObservation{Data: data, Partial: issues.partial, Detail: issues.detail}, nil
+	slices.SortFunc(
+		data.TCPStates,
+		func(a, b metrics.TCPStateCount) int { return strings.Compare(a.State, b.State) },
+	)
+	return metrics.ConnectionsObservation{
+		Data:    data,
+		Partial: issues.partial,
+		Detail:  issues.detail,
+	}, nil
 }

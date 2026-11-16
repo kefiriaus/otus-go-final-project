@@ -30,7 +30,12 @@ func parseDiskIOStat(data []byte) (metrics.DiskIOCounters, error) {
 			selected[3] = value
 		}
 	}
-	return metrics.DiskIOCounters{ReadsCompleted: selected[0], WritesCompleted: selected[1], SectorsRead: selected[2], SectorsWritten: selected[3]}, nil
+	return metrics.DiskIOCounters{
+		ReadsCompleted:  selected[0],
+		WritesCompleted: selected[1],
+		SectorsRead:     selected[2],
+		SectorsWritten:  selected[3],
+	}, nil
 }
 
 func parseDiskDeviceIdentity(data []byte) (string, error) {

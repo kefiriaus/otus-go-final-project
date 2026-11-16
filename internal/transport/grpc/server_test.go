@@ -31,6 +31,16 @@ type testStream struct {
 func (s testStream) Context() context.Context       { return s.ctx }
 func (s testStream) Send(v *statsv1.Snapshot) error { return s.send(v) }
 
+func subscribeAsync(
+	s *Server,
+	request *statsv1.SubscribeRequest,
+	stream testStream,
+) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- s.Subscribe(request, stream) }()
+	return done
+}
+
 type fakeClock struct {
 	mu      sync.Mutex
 	now     time.Time
@@ -57,7 +67,9 @@ func (f *fakeClock) NewTimer(d time.Duration) timer {
 	return t
 }
 func (t *fakeTimer) C() <-chan time.Time { return t.ch }
-func (t *fakeTimer) Stop()               { t.clock.mu.Lock(); defer t.clock.mu.Unlock(); t.stopped = true }
+
+func (t *fakeTimer) Stop() { t.clock.mu.Lock(); defer t.clock.mu.Unlock(); t.stopped = true }
+
 func (f *fakeClock) advance(d time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -69,9 +81,11 @@ func (f *fakeClock) advance(d time.Duration) {
 		}
 	}
 }
+
 func newClock() *fakeClock {
 	return &fakeClock{now: time.Unix(100, 0).UTC(), created: make(chan struct{}, 100)}
 }
+
 func waitValue[T any](t *testing.T, ch <-chan T) T {
 	t.Helper()
 	select {
@@ -83,15 +97,24 @@ func waitValue[T any](t *testing.T, ch <-chan T) T {
 		return zero
 	}
 }
+
 func TestSubscriptionValidation(t *testing.T) {
 	var calls atomic.Int32
-	p := providerFunc(func(context.Context, aggregate.Window) (daemon.Snapshot, error) { calls.Add(1); return fixture(), nil })
+	p := providerFunc(
+		func(context.Context, aggregate.Window) (daemon.Snapshot, error) { calls.Add(1); return fixture(), nil },
+	)
 	s, err := NewServer(p, Options{MaxWindowSeconds: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	for _, r := range []*statsv1.SubscribeRequest{nil, {}, {IntervalSeconds: 3601, WindowSeconds: 1}, {IntervalSeconds: 1, WindowSeconds: 11}, {IntervalSeconds: 1, WindowSeconds: ^uint32(0)}} {
+	for _, r := range []*statsv1.SubscribeRequest{
+		nil,
+		{},
+		{IntervalSeconds: 3601, WindowSeconds: 1},
+		{IntervalSeconds: 1, WindowSeconds: 11},
+		{IntervalSeconds: 1, WindowSeconds: ^uint32(0)},
+	} {
 		err := s.Subscribe(r, testStream{ctx: context.Background()})
 		if status.Code(err) != codes.InvalidArgument {
 			t.Fatal(err)
@@ -101,16 +124,20 @@ func TestSubscriptionValidation(t *testing.T) {
 		t.Fatal("invalid request reached provider")
 	}
 }
+
 func TestSubscriptionAnchoredWarmupAndLateTick(t *testing.T) {
 	clock := newClock()
 	windows := make(chan aggregate.Window, 10)
-	s, _ := NewServer(providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
-		windows <- w
-		v := fixture()
-		v.Window = w
-		v.GeneratedAt = clock.Now()
-		return v, nil
-	}), Options{})
+	s, _ := NewServer(
+		providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
+			windows <- w
+			v := fixture()
+			v.Window = w
+			v.GeneratedAt = clock.Now()
+			return v, nil
+		}),
+		Options{},
+	)
 	s.clock = clock
 	defer s.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -118,7 +145,15 @@ func TestSubscriptionAnchoredWarmupAndLateTick(t *testing.T) {
 	sent := make(chan *statsv1.Snapshot, 10)
 	done := make(chan error, 1)
 	go func() {
-		done <- s.Subscribe(&statsv1.SubscribeRequest{IntervalSeconds: 2, WindowSeconds: 3}, testStream{ctx: ctx, send: func(v *statsv1.Snapshot) error { sent <- v; return nil }})
+		request := &statsv1.SubscribeRequest{IntervalSeconds: 2, WindowSeconds: 3}
+		stream := testStream{
+			ctx: ctx,
+			send: func(v *statsv1.Snapshot) error {
+				sent <- v
+				return nil
+			},
+		}
+		done <- s.Subscribe(request, stream)
 	}()
 	waitValue(t, clock.created)
 	clock.advance(2 * time.Second)
@@ -143,12 +178,16 @@ func TestSubscriptionAnchoredWarmupAndLateTick(t *testing.T) {
 		t.Fatal("cancellation not preserved")
 	}
 }
+
 func TestSubscriptionBeforeWarmupCancellationAndLimit(t *testing.T) {
 	clock := newClock()
-	s, _ := NewServer(providerFunc(func(context.Context, aggregate.Window) (daemon.Snapshot, error) {
-		t.Error("before warmup")
-		return fixture(), nil
-	}), Options{MaxSubscriptions: 1})
+	s, _ := NewServer(
+		providerFunc(func(context.Context, aggregate.Window) (daemon.Snapshot, error) {
+			t.Error("before warmup")
+			return fixture(), nil
+		}),
+		Options{MaxSubscriptions: 1},
+	)
 	s.clock = clock
 	defer s.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -157,7 +196,10 @@ func TestSubscriptionBeforeWarmupCancellationAndLimit(t *testing.T) {
 		done <- s.Subscribe(&statsv1.SubscribeRequest{IntervalSeconds: 10, WindowSeconds: 1}, testStream{ctx: ctx})
 	}()
 	waitValue(t, clock.created)
-	err := s.Subscribe(&statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1}, testStream{ctx: ctx})
+	err := s.Subscribe(
+		&statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1},
+		testStream{ctx: ctx},
+	)
 	if status.Code(err) != codes.ResourceExhausted {
 		t.Fatal(err)
 	}
@@ -167,17 +209,22 @@ func TestSubscriptionBeforeWarmupCancellationAndLimit(t *testing.T) {
 		t.Fatal("permit leaked")
 	}
 }
+
 func TestSubscriptionProviderFailure(t *testing.T) {
 	clock := newClock()
-	s, _ := NewServer(providerFunc(func(context.Context, aggregate.Window) (daemon.Snapshot, error) {
-		return daemon.Snapshot{}, errors.New("broken")
-	}), Options{})
+	s, _ := NewServer(
+		providerFunc(func(context.Context, aggregate.Window) (daemon.Snapshot, error) {
+			return daemon.Snapshot{}, errors.New("broken")
+		}),
+		Options{},
+	)
 	s.clock = clock
 	defer s.Close()
-	done := make(chan error, 1)
-	go func() {
-		done <- s.Subscribe(&statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1}, testStream{ctx: context.Background()})
-	}()
+	done := subscribeAsync(
+		s,
+		&statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1},
+		testStream{ctx: context.Background()},
+	)
 	waitValue(t, clock.created)
 	clock.advance(time.Second)
 	if status.Code(waitValue(t, done)) != codes.Internal {
@@ -206,24 +253,28 @@ func waitDeadline(t *testing.T, c *fakeClock, unix int64) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
 func TestPendingSnapshotReplacesOlderAndClientIsIndependent(t *testing.T) {
 	clock := newClock()
 	built := make(chan aggregate.Window, 20)
-	s, _ := NewServer(providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
-		built <- w
-		v := fixture()
-		v.Window = w
-		return v, nil
-	}), Options{SendTimeout: 20 * time.Second})
+	s, _ := NewServer(
+		providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
+			built <- w
+			v := fixture()
+			v.Window = w
+			return v, nil
+		}),
+		Options{SendTimeout: 20 * time.Second},
+	)
 	s.clock = clock
 	defer s.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sent := make(chan int64, 10)
 	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- s.Subscribe(&statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1}, testStream{ctx: ctx, send: func(v *statsv1.Snapshot) error {
+	done := subscribeAsync(s, &statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1}, testStream{
+		ctx: ctx,
+		send: func(v *statsv1.Snapshot) error {
 			sent <- v.WindowEnd.AsTime().Unix()
 			if v.WindowEnd.AsTime().Unix() == 101 {
 				select {
@@ -233,8 +284,8 @@ func TestPendingSnapshotReplacesOlderAndClientIsIndependent(t *testing.T) {
 				}
 			}
 			return nil
-		}})
-	}()
+		},
+	})
 	waitDeadline(t, clock, 101)
 	clock.advance(time.Second)
 	if waitValue(t, sent) != 101 {
@@ -255,28 +306,32 @@ func TestPendingSnapshotReplacesOlderAndClientIsIndependent(t *testing.T) {
 	cancel()
 	waitValue(t, done)
 }
+
 func TestSendTimeoutReleasesSlot(t *testing.T) {
 	clock := newClock()
-	s, _ := NewServer(providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
-		v := fixture()
-		v.Window = w
-		return v, nil
-	}), Options{SendTimeout: 5 * time.Second, MaxSubscriptions: 1})
+	s, _ := NewServer(
+		providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
+			v := fixture()
+			v.Window = w
+			return v, nil
+		}),
+		Options{SendTimeout: 5 * time.Second, MaxSubscriptions: 1},
+	)
 	s.clock = clock
 	defer s.Close()
 	transportCtx, transportCancel := context.WithCancel(context.Background())
 	defer transportCancel()
 	started := make(chan struct{})
 	finished := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- s.Subscribe(&statsv1.SubscribeRequest{IntervalSeconds: 10, WindowSeconds: 1}, testStream{ctx: transportCtx, send: func(*statsv1.Snapshot) error {
+	done := subscribeAsync(s, &statsv1.SubscribeRequest{IntervalSeconds: 10, WindowSeconds: 1}, testStream{
+		ctx: transportCtx,
+		send: func(*statsv1.Snapshot) error {
 			close(started)
 			<-transportCtx.Done()
 			close(finished)
 			return transportCtx.Err()
-		}})
-	}()
+		},
+	})
 	waitDeadline(t, clock, 101)
 	clock.advance(time.Second)
 	waitValue(t, started)
@@ -294,28 +349,38 @@ func TestSendTimeoutReleasesSlot(t *testing.T) {
 
 func TestBlockedClientDoesNotDelayHealthySubscriber(t *testing.T) {
 	clock := newClock()
-	s, _ := NewServer(providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
-		v := fixture()
-		v.Window = w
-		return v, nil
-	}), Options{SendTimeout: 20 * time.Second})
+	s, _ := NewServer(
+		providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
+			v := fixture()
+			v.Window = w
+			return v, nil
+		}),
+		Options{SendTimeout: 20 * time.Second},
+	)
 	s.clock = clock
 	defer s.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	slowStarted := make(chan struct{})
-	slowDone := make(chan error, 1)
-	go func() {
-		slowDone <- s.Subscribe(&statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1}, testStream{ctx: ctx, send: func(*statsv1.Snapshot) error { close(slowStarted); <-ctx.Done(); return ctx.Err() }})
-	}()
+	slowDone := subscribeAsync(s, &statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1}, testStream{
+		ctx: ctx,
+		send: func(*statsv1.Snapshot) error {
+			close(slowStarted)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
 	waitDeadline(t, clock, 101)
 	clock.advance(time.Second)
 	waitValue(t, slowStarted)
 	healthy := make(chan *statsv1.Snapshot, 10)
-	healthyDone := make(chan error, 1)
-	go func() {
-		healthyDone <- s.Subscribe(&statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1}, testStream{ctx: ctx, send: func(v *statsv1.Snapshot) error { healthy <- v; return nil }})
-	}()
+	healthyDone := subscribeAsync(s, &statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1}, testStream{
+		ctx: ctx,
+		send: func(v *statsv1.Snapshot) error {
+			healthy <- v
+			return nil
+		},
+	})
 	limit := time.Now().Add(2 * time.Second)
 	for {
 		clock.mu.Lock()
