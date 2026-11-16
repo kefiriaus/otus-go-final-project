@@ -74,8 +74,8 @@ func newCPUTestClient(t *testing.T, service statsv1.StatsServiceServer) statsv1.
 
 func TestReceiveSnapshotsRealGRPC(t *testing.T) {
 	snapshots := []*statsv1.Snapshot{
-		cpuFixture(statsv1.CollectionState_COLLECTION_STATE_OK),
-		cpuFixture(statsv1.CollectionState_COLLECTION_STATE_PARTIAL),
+		clientSnapshot(statsv1.CollectionState_COLLECTION_STATE_OK),
+		clientSnapshot(statsv1.CollectionState_COLLECTION_STATE_PARTIAL),
 	}
 	service := &cpuTestServer{
 		snapshots: snapshots,
@@ -91,11 +91,11 @@ func TestReceiveSnapshotsRealGRPC(t *testing.T) {
 	if request.IntervalSeconds != 2 || request.WindowSeconds != 30 {
 		t.Fatalf("request=%+v", request)
 	}
-	first, err := formatCPU(snapshots[0])
+	first, err := formatSnapshot(snapshots[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := formatCPU(snapshots[1])
+	second, err := formatSnapshot(snapshots[1])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +155,8 @@ func TestReceiveSnapshotsServerError(t *testing.T) {
 func TestReceiveSnapshotsWriterError(t *testing.T) {
 	service := &cpuTestServer{
 		snapshots: []*statsv1.Snapshot{
-			cpuFixture(statsv1.CollectionState_COLLECTION_STATE_OK),
-			cpuFixture(statsv1.CollectionState_COLLECTION_STATE_OK),
+			clientSnapshot(statsv1.CollectionState_COLLECTION_STATE_OK),
+			clientSnapshot(statsv1.CollectionState_COLLECTION_STATE_OK),
 		},
 		request: make(chan *statsv1.SubscribeRequest, 1),
 	}

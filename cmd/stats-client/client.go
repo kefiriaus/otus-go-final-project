@@ -50,7 +50,7 @@ func receiveSnapshots(
 			}
 			return fmt.Errorf("receive snapshot: %w", err)
 		}
-		formatted, err := formatCPU(snapshot)
+		formatted, err := formatSnapshot(snapshot)
 		if err != nil {
 			return fmt.Errorf("format snapshot: %w", err)
 		}
