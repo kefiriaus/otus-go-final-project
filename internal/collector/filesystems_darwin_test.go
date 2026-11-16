@@ -77,15 +77,19 @@ func TestDarwinUsageEdgeCases(t *testing.T) {
 	if err != nil || len(got.Readings) != 4 {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if got.Readings[0].Usage.UsedMebibytes != 0 || *got.Readings[0].Usage.UsedPercent != 0 ||
-		*got.Readings[0].Usage.UsedInodes != 0 || *got.Readings[0].Usage.UsedInodesPercent != 0 {
-		t.Fatalf("zero usage: %+v", got.Readings[0].Usage)
+	invalidReading := got.Readings[0]
+	emptyReading := got.Readings[1]
+	zeroReading := got.Readings[2]
+	zeroTotalReading := got.Readings[3]
+	if zeroReading.Usage.UsedMebibytes != 0 || *zeroReading.Usage.UsedPercent != 0 ||
+		*zeroReading.Usage.UsedInodes != 0 || *zeroReading.Usage.UsedInodesPercent != 0 {
+		t.Fatalf("zero usage: %+v", zeroReading.Usage)
 	}
-	if got.Readings[1].Usage.UsedPercent != nil || got.Readings[1].Usage.UsedInodes != nil ||
-		got.Readings[1].Usage.UsedInodesPercent != nil {
-		t.Fatalf("zero total: %+v", got.Readings[1].Usage)
+	if zeroTotalReading.Usage.UsedPercent != nil || zeroTotalReading.Usage.UsedInodes != nil ||
+		zeroTotalReading.Usage.UsedInodesPercent != nil {
+		t.Fatalf("zero total: %+v", zeroTotalReading.Usage)
 	}
-	if got.Readings[2].Err == nil || got.Readings[2].MountPoint != "/empty" || got.Readings[3].Err == nil {
+	if emptyReading.Err == nil || emptyReading.MountPoint != "/empty" || invalidReading.Err == nil {
 		t.Fatalf("invalid records: %+v", got.Readings)
 	}
 }
