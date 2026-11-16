@@ -228,3 +228,180 @@ func TestRealGRPCIndependentSubscriptions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type loadClient struct {
+	stream grpc.ServerStreamingClient[statsv1.Snapshot]
+	cancel context.CancelFunc
+}
+
+type loadResult struct {
+	index int
+	end   int64
+	err   error
+}
+
+func newLoadClients(t *testing.T, client statsv1.StatsServiceClient, count int) []loadClient {
+	t.Helper()
+	clients := make([]loadClient, 0, count)
+	for i := 0; i < count; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		stream, err := client.Subscribe(ctx, &statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1})
+		if err != nil {
+			cancel()
+			for _, existing := range clients {
+				existing.cancel()
+			}
+			t.Fatal(err)
+		}
+		clients = append(clients, loadClient{stream: stream, cancel: cancel})
+	}
+	return clients
+}
+
+func receiveLoadSnapshots(clients []loadClient) <-chan loadResult {
+	results := make(chan loadResult, len(clients))
+	for i, client := range clients {
+		go func() {
+			snapshot, err := client.stream.Recv()
+			result := loadResult{index: i, err: err}
+			if err == nil {
+				result.end = snapshot.WindowEnd.AsTime().Unix()
+			}
+			results <- result
+		}()
+	}
+	return results
+}
+
+func checkLoadSnapshots(t *testing.T, results <-chan loadResult, count int, wantEnd int64) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		select {
+		case result := <-results:
+			if result.err != nil {
+				t.Fatalf("client %d: %v", result.index, result.err)
+			}
+			if result.end != wantEnd {
+				t.Fatalf("client %d: window end %d, want %d", result.index, result.end, wantEnd)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("received %d of %d snapshots", i, count)
+		}
+	}
+}
+
+func expectLoadCanceled(t *testing.T, clients []loadClient) {
+	t.Helper()
+	for i, client := range clients {
+		done := make(chan error, 1)
+		go func() {
+			_, err := client.stream.Recv()
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if status.Code(err) != codes.Canceled {
+				t.Fatalf("client %d: expected cancellation, got %v", i, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("client %d: cancellation did not arrive", i)
+		}
+	}
+}
+
+func cancelLoadClients(t *testing.T, clients []loadClient) {
+	t.Helper()
+	for _, client := range clients {
+		client.cancel()
+	}
+	expectLoadCanceled(t, clients)
+}
+
+func waitForSlotCount(t *testing.T, server *Server, want int) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if len(server.slots) == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("slot count %d, want %d", len(server.slots), want)
+		}
+		<-ticker.C
+	}
+}
+
+func waitForLoadTimers(t *testing.T, clock *fakeClock, want int, deadline int64) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	limit := time.Now().Add(5 * time.Second)
+	for {
+		clock.mu.Lock()
+		count := 0
+		for _, timer := range clock.timers {
+			if !timer.stopped && timer.deadline.Unix() == deadline {
+				count++
+			}
+		}
+		clock.mu.Unlock()
+		if count == want {
+			return
+		}
+		if time.Now().After(limit) {
+			t.Fatalf("found %d timers at %d, want %d", count, deadline, want)
+		}
+		<-ticker.C
+	}
+}
+
+func TestRealGRPCConcurrentSubscriberLoad(t *testing.T) {
+	clock := newClock()
+	s, _ := NewServer(providerFunc(func(_ context.Context, w aggregate.Window) (daemon.Snapshot, error) {
+		value := fixture()
+		value.Window = w
+		value.GeneratedAt = clock.Now()
+		return value, nil
+	}), Options{})
+	s.clock = clock
+	defer s.Close()
+	client := startBufconn(t, s)
+	clients := newLoadClients(t, client, 32)
+	waitForSlotCount(t, s, 32)
+	defer func() {
+		for _, client := range clients {
+			client.cancel()
+		}
+	}()
+	extraCtx, extraCancel := context.WithCancel(context.Background())
+	defer extraCancel()
+	extra, err := client.Subscribe(extraCtx, &statsv1.SubscribeRequest{IntervalSeconds: 1, WindowSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := extra.Recv(); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("33rd subscription returned %v", err)
+	}
+	waitForLoadTimers(t, clock, 32, 101)
+	results := receiveLoadSnapshots(clients)
+	clock.advance(time.Second)
+	checkLoadSnapshots(t, results, len(clients), 101)
+	cancelLoadClients(t, clients[:16])
+	waitForSlotCount(t, s, 16)
+	active := clients[16:]
+	active = append(active, newLoadClients(t, client, 16)...)
+	defer func() {
+		for _, client := range active[16:] {
+			client.cancel()
+		}
+	}()
+	waitForLoadTimers(t, clock, 32, 102)
+	results = receiveLoadSnapshots(active)
+	clock.advance(time.Second)
+	checkLoadSnapshots(t, results, len(active), 102)
+	s.Close()
+	expectLoadCanceled(t, active)
+	waitForSlotCount(t, s, 0)
+}
