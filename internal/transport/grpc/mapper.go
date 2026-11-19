@@ -214,7 +214,39 @@ func mapConnections(data *metrics.Connections) (*statsv1.ConnectionsData, error)
 	return out, nil
 }
 
+func sanitizeSnapshotReadings(v daemon.Snapshot) daemon.Snapshot {
+	if v.DiskIO.Enabled && v.DiskIO.Summary.Data != nil {
+		data := *v.DiskIO.Summary.Data
+		filtered := make([]metrics.DiskIO, 0, len(data))
+		for _, r := range data {
+			if utf8.ValidString(r.Device) {
+				filtered = append(filtered, r)
+			}
+		}
+		if len(filtered) != len(data) {
+			v.DiskIO.Summary.Data = &filtered
+			v.DiskIO.Summary.Partial = true
+		}
+	}
+	if v.Filesystems.Enabled && v.Filesystems.Summary.Data != nil {
+		data := *v.Filesystems.Summary.Data
+		filtered := make([]metrics.FilesystemUsage, 0, len(data))
+		for _, r := range data {
+			if utf8.ValidString(r.MountPoint) && utf8.ValidString(r.Device) &&
+				utf8.ValidString(r.FilesystemType) {
+				filtered = append(filtered, r)
+			}
+		}
+		if len(filtered) != len(data) {
+			v.Filesystems.Summary.Data = &filtered
+			v.Filesystems.Summary.Partial = true
+		}
+	}
+	return v
+}
+
 func mapSnapshot(v daemon.Snapshot) (*statsv1.Snapshot, error) {
+	v = sanitizeSnapshotReadings(v)
 	out := &statsv1.Snapshot{
 		WindowStart: timestamppb.New(v.Window.Start), WindowEnd: timestamppb.New(v.Window.End),
 		GeneratedAt: timestamppb.New(v.GeneratedAt),

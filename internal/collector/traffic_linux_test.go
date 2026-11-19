@@ -172,7 +172,7 @@ func testTrafficCapture(mode string) *TrafficCapture {
 	c.options.RetryInterval = 5 * time.Millisecond
 	c.command = func(string) *exec.Cmd {
 		// #nosec G204,G702 -- The helper executes this test's own binary with a fixed argument list.
-		return exec.CommandContext(
+		cmd := exec.CommandContext(
 			context.Background(),
 			os.Args[0],
 			"-test.run=^TestTrafficHelper$",
@@ -180,6 +180,8 @@ func testTrafficCapture(mode string) *TrafficCapture {
 			"traffic-helper",
 			mode,
 		)
+		cmd.Env = append(os.Environ(), "GORACE=atexit_sleep_ms=0")
+		return cmd
 	}
 	return c
 }

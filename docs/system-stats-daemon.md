@@ -362,7 +362,8 @@ runner. Selection is fixed at construction: by default interfaces must be up and
 not loopback. Explicit loopback selection requires `IncludeLoopback=true`.
 At most eight interfaces are allowed; a larger default selection returns an
 error, so callers must choose a smaller explicit set. Interface options are
-currently programmatic; CLI/JSON and application wiring remain pending.
+currently programmatic; CLI/JSON does not expose interface selection. The daemon
+constructs and starts capture using the default interface selection.
 
 Capture runs directly without a shell, in nonpromiscuous mode, with both directions,
 packet-buffered PCAP output and a 262144-byte snapshot limit. TCPdump must be installed

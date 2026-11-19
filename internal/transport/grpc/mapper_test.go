@@ -12,6 +12,11 @@ import (
 	statsv1 "github.com/kefiriaus/otus-go-final-project/pkg/api/stats/v1"
 )
 
+const (
+	testDiskDevice     = "sda"
+	testFilesystemType = "ext4"
+)
+
 func fixture() daemon.Snapshot {
 	at := time.Unix(100, 0).UTC()
 	return daemon.Snapshot{
@@ -34,7 +39,7 @@ func TestMapStatusesAndPresence(t *testing.T) {
 		},
 	}
 	fs := []metrics.FilesystemUsage{
-		{MountPoint: "/", Device: "/dev/x", FilesystemType: "ext4", UsedPercent: &zero},
+		{MountPoint: "/", Device: "/dev/x", FilesystemType: testFilesystemType, UsedPercent: &zero},
 	}
 	v.Filesystems = daemon.Section[[]metrics.FilesystemUsage]{
 		Enabled: true,
@@ -87,6 +92,56 @@ func TestMapStatusesAndPresence(t *testing.T) {
 	}
 }
 
+func TestMapDiskInvalidUTF8(t *testing.T) {
+	v := fixture()
+	at := v.Window.Start
+	disks := []metrics.DiskIO{
+		{Device: testDiskDevice, TransfersPerSecond: 2, KibibytesPerSecond: 3},
+		{Device: string([]byte{'s', 'd', 0xff}), TransfersPerSecond: 4},
+	}
+	v.DiskIO = daemon.Section[[]metrics.DiskIO]{
+		Enabled: true,
+		Summary: aggregate.Summary[[]metrics.DiskIO]{
+			Data: &disks, CoverageRatio: 1, LastSampleAt: &at,
+		},
+	}
+	out, err := mapSnapshot(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.DiskIo.Status.State != statsv1.CollectionState_COLLECTION_STATE_PARTIAL ||
+		out.DiskIo.Data == nil || len(out.DiskIo.Data.Devices) != 1 ||
+		out.DiskIo.Data.Devices[0].Device != testDiskDevice {
+		t.Fatal(out.DiskIo)
+	}
+}
+
+func TestMapFilesystemInvalidUTF8(t *testing.T) {
+	v := fixture()
+	at := v.Window.Start
+	filesystems := []metrics.FilesystemUsage{
+		{MountPoint: "/", Device: testDiskDevice, FilesystemType: testFilesystemType},
+		{
+			MountPoint: string([]byte{'/', 0xff}), Device: "sdb", FilesystemType: testFilesystemType,
+		},
+	}
+	v.Filesystems = daemon.Section[[]metrics.FilesystemUsage]{
+		Enabled: true,
+		Summary: aggregate.Summary[[]metrics.FilesystemUsage]{
+			Data: &filesystems, CoverageRatio: 1, LastSampleAt: &at,
+		},
+	}
+	out, err := mapSnapshot(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Filesystems.Status.State != statsv1.CollectionState_COLLECTION_STATE_PARTIAL ||
+		out.Filesystems.Data == nil || len(out.Filesystems.Data.Filesystems) != 1 ||
+		out.Filesystems.Data.Filesystems[0].MountPoint != "/" {
+		t.Fatal(out.Filesystems)
+	}
+}
+
 func TestMapRejectsInconsistentData(t *testing.T) {
 	for _, coverage := range []float64{-1, 2, math.NaN()} {
 		v := fixture()
@@ -131,7 +186,7 @@ func TestMapAllDataAndCopies(t *testing.T) {
 			LastSampleAt:  &at,
 		},
 	}
-	disks := []metrics.DiskIO{{Device: "sda", TransfersPerSecond: 2, KibibytesPerSecond: 3}}
+	disks := []metrics.DiskIO{{Device: testDiskDevice, TransfersPerSecond: 2, KibibytesPerSecond: 3}}
 	v.DiskIO = daemon.Section[[]metrics.DiskIO]{
 		Enabled: true,
 		Summary: aggregate.Summary[[]metrics.DiskIO]{
@@ -143,8 +198,8 @@ func TestMapAllDataAndCopies(t *testing.T) {
 	fs := []metrics.FilesystemUsage{
 		{
 			MountPoint:        "/",
-			Device:            "sda",
-			FilesystemType:    "ext4",
+			Device:            testDiskDevice,
+			FilesystemType:    testFilesystemType,
 			UsedMebibytes:     8,
 			UsedPercent:       &zero,
 			UsedInodes:        &zero,

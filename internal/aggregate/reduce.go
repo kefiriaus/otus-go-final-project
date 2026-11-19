@@ -48,8 +48,12 @@ func selectIntervals[T any](window Window, values []Interval[T]) (selection, err
 		result.durations[i] = d
 		result.covered += d
 		result.partial = result.partial || v.Partial
-		if v.ObservedAt.After(result.last) {
-			result.last = v.ObservedAt
+		observedAt := v.ObservedAt
+		if observedAt.After(window.End) {
+			observedAt = window.End
+		}
+		if observedAt.After(result.last) {
+			result.last = observedAt
 		}
 	}
 	return result, nil
@@ -72,6 +76,7 @@ func WeightedMean(window Window, values []Interval[float64]) (Summary[float64], 
 		return Summary[float64]{}, err
 	}
 	result := 0.0
+	minimum, maximum := math.Inf(1), math.Inf(-1)
 	for i, v := range values {
 		if !finite(v.Value) {
 			return Summary[float64]{}, fmt.Errorf("mean requires finite values")
@@ -79,6 +84,8 @@ func WeightedMean(window Window, values []Interval[float64]) (Summary[float64], 
 		if s.durations[i] == 0 {
 			continue
 		}
+		minimum = math.Min(minimum, v.Value)
+		maximum = math.Max(maximum, v.Value)
 		result += v.Value * (float64(s.durations[i]) / float64(s.covered))
 		if !finite(result) {
 			return Summary[float64]{}, fmt.Errorf("mean overflow")
@@ -87,6 +94,7 @@ func WeightedMean(window Window, values []Interval[float64]) (Summary[float64], 
 	if s.covered == 0 {
 		return Summary[float64]{}, nil
 	}
+	result = math.Max(minimum, math.Min(maximum, result))
 	return summarized(window, s, result, s.last), nil
 }
 

@@ -95,6 +95,18 @@ func TestMeanCPUUsage(t *testing.T) {
 	}
 }
 
+func TestMeanCPUUsageClippedObservation(t *testing.T) {
+	v := interval(0, 1.05, cpuRates(10, 90))
+	v.ObservedAt = at(1.05)
+	got, err := MeanCPUUsage(Window{at(0), at(1)}, []Interval[[]float64]{v})
+	if err != nil || got.Data == nil {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if got.LastSampleAt == nil || !got.LastSampleAt.Equal(at(1)) {
+		t.Fatalf("last sample %v, want %v", got.LastSampleAt, at(1))
+	}
+}
+
 func TestMeanCPUUsageUnequalTotals(t *testing.T) {
 	for _, tc := range []struct {
 		second []float64

@@ -136,6 +136,19 @@ func TestMeanDiskIO(t *testing.T) {
 	closeTo(t, other.Data.TransfersPerSecond, 100)
 }
 
+func TestMeanDiskIOClippedObservation(t *testing.T) {
+	v := interval(0, 1.05, []float64{10, 5, 20, 10})
+	v.ObservedAt = at(1.05)
+	got, err := MeanDiskIO(Window{at(0), at(1)}, "sda", []Interval[[]float64]{v})
+	if err != nil || got.Data == nil {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if got.LastSampleAt == nil || !got.LastSampleAt.Equal(at(1)) {
+		t.Fatalf("last sample %v, want %v", got.LastSampleAt, at(1))
+	}
+	closeTo(t, got.Data.TransfersPerSecond, 15)
+}
+
 func TestMeanDiskIOInvalid(t *testing.T) {
 	if _, err := MeanDiskIO(Window{}, "sda", nil); err == nil {
 		t.Fatal("invalid window")
