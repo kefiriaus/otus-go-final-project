@@ -1,0 +1,11 @@
+{
+  "max_window_seconds": 3600,
+  "subsystems": {
+    "load_average": true,
+    "cpu": true,
+    "disk_io": true,
+    "filesystems": true,
+    "traffic": true,
+    "connections": true
+  }
+}
